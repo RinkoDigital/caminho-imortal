@@ -1,0 +1,17 @@
+{
+  "name": "caminho-imortal",
+  "version": "1.0.0",
+  "description": "Caminho Imortal - simulador de vida com cultivacao xianxia",
+  "private": true,
+  "scripts": {
+    "sync": "cap sync android",
+    "open:android": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor-community/admob": "^8.1.0",
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
+    "@revenuecat/purchases-capacitor": "^13.4.2"
+  }
+}

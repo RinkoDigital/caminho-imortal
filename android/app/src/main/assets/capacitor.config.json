@@ -1,0 +1,9 @@
+{
+	"appId": "com.rinkodigital.caminhoimortal",
+	"appName": "Caminho Imortal",
+	"webDir": "www",
+	"backgroundColor": "#0a0f0d",
+	"android": {
+		"backgroundColor": "#0a0f0d"
+	}
+}
