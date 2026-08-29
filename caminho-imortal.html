@@ -474,6 +474,43 @@
         <p class="sub">Nasça mortal. Escolha entre a disciplina, a ambição, o crime ou o caminho proibido. Cultive seu Qi, sobreviva às tribulações e descubra se seu destino é a ascensão — ou o esquecimento.</p>
       </div>
 
+      <div class="hof" id="cloudAuthWrap" style="margin-bottom:18px;">
+        <h3>Conta na Nuvem</h3>
+        <div id="cloudAuthLoggedOut">
+          <p style="margin:0 0 10px;font-size:13px;">Faça login para sincronizar seu progresso entre aparelhos. Jogar sem conta continua funcionando normalmente (salvo neste aparelho).</p>
+          <div class="creation-grid" style="margin-bottom:10px;">
+            <div class="field">
+              <label class="label" for="inpCloudEmail">E-mail</label>
+              <input type="email" id="inpCloudEmail" autocomplete="email" />
+            </div>
+            <div class="field">
+              <label class="label" for="inpCloudPass">Senha</label>
+              <input type="password" id="inpCloudPass" autocomplete="current-password" />
+            </div>
+          </div>
+          <div id="cloudAuthMsg" style="font-size:12.5px;margin:0 0 10px;min-height:1em;"></div>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="btnCloudSignIn">Entrar</button>
+            <button class="btn btn-ghost" id="btnCloudSignUp">Criar Conta</button>
+          </div>
+          <div style="margin-top:8px;"><a href="#" id="linkForgotPass" style="font-size:12.5px;">Esqueci minha senha</a></div>
+        </div>
+        <div class="hidden" id="cloudAuthLoggedIn">
+          <p style="margin:0 0 10px;">Conectado(a) como <strong id="cloudAuthEmail"></strong>. Seu progresso sincroniza automaticamente na nuvem.</p>
+          <div class="btn-row">
+            <button class="btn btn-ghost" id="btnCloudSignOut">Sair da Conta</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="hof hidden" id="saveContinueWrap" style="margin-bottom:18px;">
+        <h3>Jornada em andamento</h3>
+        <div id="saveContinueInfo" style="margin-bottom:10px;"></div>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="btnContinueSave">Continuar Jornada</button>
+        </div>
+      </div>
+
       <div class="creation-grid">
         <div class="field">
           <label class="label" for="inpName">Nome do personagem</label>
@@ -593,6 +630,21 @@ const TALENTS = [
   {key:'mutante',   label:'Raiz Espiritual Mutante',          w:3.2,mult:2.1,  desc:'Sua energia desafia as leis comuns da natureza — Raio, Gelo ou Escuridão correm em você.'},
   {key:'corpo_sagrado', label:'Corpo Sagrado Primordial',     w:0.5,mult:2.9,  desc:'Nascido com as marcas do Dao antigo. Uma lenda a cada séculos — o próprio universo parece ajudar seu cultivo.'}
 ];
+// Pílulas de refino e alguns eventos raros aumentam s.talentMult ao longo da
+// vida (ver ACTIONS.refinar_raiz e afins). Sem isto, o rótulo exibido no
+// "Talento" ficava travado no nome de nascimento para sempre, mesmo com o
+// bônus numérico (Bônus de Qi) subindo — o que fazia o efeito parecer que
+// não fazia nada. Atualiza só o rótulo (s.talentLabel), nunca a chave
+// s.talent usada por eventos de destino (ex.: corpo_sagrado) — e nunca além
+// de "Celestial": Mutante e Corpo Sagrado são natureza inata de nascença,
+// não algo que se compra com pílulas.
+function recalcTalentLabel(s){
+  const birthIdx = TALENTS.findIndex(t=>t.key===s.talent);
+  if(birthIdx<0 || birthIdx>=4) return;
+  let bestIdx = birthIdx;
+  for(let i=birthIdx+1;i<=3;i++){ if(s.talentMult >= TALENTS[i].mult) bestIdx = i; }
+  if(bestIdx>birthIdx) s.talentLabel = TALENTS[bestIdx].label;
+}
 const ELEMENTOS_COMUNS = ['Água','Fogo','Terra','Metal','Madeira'];
 const ELEMENTOS_MUTANTES = ['Raio','Gelo','Escuridão'];
 function gerarElementosRaiz(talentKey){
@@ -673,6 +725,7 @@ function newState(name, gender, origin){
     age:0, year:1,
     saude:origin.stats.saude, felicidade:origin.stats.felicidade,
     inteligencia:origin.stats.inteligencia, riqueza:origin.stats.riqueza,
+    taeis: Math.round(origin.stats.riqueza*1.5),
     karma:origin.stats.karma, fama:0,
     qi: origin.startQi||0, realmIdx:0, camadaIdx:0,
     baseLifespan: rint(74,86) + (LINHAGEM_LIFESPAN_BONUS[talent.key]||0),
@@ -681,7 +734,8 @@ function newState(name, gender, origin){
     wanted:0, maxWanted:0, imprisonedYears:0, corrupted:false, mentorFound:false,
     flags:{}, seenEvents:{}, log:[], alive:true, deathCause:null, ascended:false,
     lowHappinessStreak:0, sectMult:1, actionsUsedThisYear:{}, socialCircle:{},
-    equipment:{arma:null, armadura:null, pincel:null}, talismanCount:0, phoenixUsed:false
+    equipment:{arma:null, armadura:null, pincel:null, ferramenta:null}, talismanCount:0, phoenixUsed:false,
+    inventory:{rosas:0, manuscritos:0, pilulas:0}
   };
   if(origin.flag) s.flags[origin.flag]=true;
   s.family = generateFamily(s);
@@ -748,17 +802,23 @@ function bestHeir(s){
 }
 function resolveDualCultivation(s, partner){
   const compat = partner.relationship;
-  if(compat<30 && chance(0.35)){
+  const instrumento = equippedItem(s, 'ferramenta');
+  const dualBonus = (instrumento && instrumento.dualCultivationBonus) ? instrumento.dualCultivationBonus : 0;
+  if(compat<30 && chance(clamp(0.35 - dualBonus, 0.05, 0.35))){
     const dmg = rint(6,14);
     s.saude -= dmg; s.felicidade -= 4;
-    return {outcome:`Cultivo duplo com ${partner.name} termina em dissonância — a confiança entre vocês ainda não é suficiente, e o fluxo de Qi se choca de forma dolorosa.`, delta:{saude:-dmg, felicidade:-4}};
+    let outcome = `Cultivo duplo com ${partner.name} termina em dissonância — a confiança entre vocês ainda não é suficiente, e o fluxo de Qi se choca de forma dolorosa.`;
+    if(dualBonus>0) outcome += ` A melodia da ${instrumento.name} amortece parte do choque.`;
+    return {outcome, delta:{saude:-dmg, felicidade:-4}};
   }
   const base = (6 + s.inteligencia*0.03) * s.talentMult / realmDifficulty(s);
-  const bonus = 1 + (compat/200);
+  const bonus = 1 + (compat/200) + dualBonus;
   const gain = base * bonus;
   s.qi += gain; s.felicidade += 3;
   setRelationship(partner, rint(4,9));
-  return {outcome:`Você e ${partner.name} cultivam em harmonia, trocando e equilibrando o fluxo de Qi um do outro.`, delta:{qi:gain, felicidade:3}};
+  let outcome = `Você e ${partner.name} cultivam em harmonia, trocando e equilibrando o fluxo de Qi um do outro.`;
+  if(dualBonus>0) outcome += ` A ${instrumento.name} conduz o ritmo, tornando a troca ainda mais fluida.`;
+  return {outcome, delta:{qi:gain, felicidade:3}};
 }
 function setRelationship(person, delta){
   person.relationship = clamp(person.relationship+delta, 0, 100);
@@ -771,6 +831,7 @@ function clampAllStats(s){
   s.fama = clamp(s.fama,0,100);
   s.qi = clamp(s.qi,0,100);
   s.riqueza = Math.max(0, s.riqueza);
+  s.taeis = Math.max(0, s.taeis||0);
 }
 function maxLifespan(s){
   return s.baseLifespan + s.lifespanBonus;
@@ -814,6 +875,25 @@ const ARTIFACT_DB = {
       desc:'+45 pedras espirituais ao ano; +10% de sucesso ao estudar uma especialização.', riquezaPerYear:45, especializacaoBonus:0.10},
     {key:'imperador_jade', name:'Pincel do Imperador de Jade', rarity:'Mítico', price:100000, minRealm:'nascente',
       desc:'+90 pedras espirituais ao ano; +15% de sucesso ao estudar uma especialização.', riquezaPerYear:90, especializacaoBonus:0.15}
+  ],
+  // Ferramentas de ofício — caldeirões (Alquimistas) e instrumentos/adereços
+  // místicos (Artistas da Espada musicais/dança). Cada item exige a
+  // especialização correspondente (`requires`) para ser comprado e equipado.
+  ferramenta: [
+    {key:'caldeira_bronze', name:'Caldeira de Bronze de Baixo Nível', rarity:'Comum', price:120, minRealm:'mortal', requires:'alchemist',
+      desc:'Caldeirão básico — ainda instável. 15% de chance anual de explodir durante o refino, ferindo você.', explosionChance:0.15, riquezaMult:1.0},
+    {key:'caldeira_jade', name:'Caldeira do Fogo Terrestre de Jade', rarity:'Raro', price:2200, minRealm:'fundacao', requires:'alchemist',
+      desc:'+35% no lucro do refino de pílulas; reduz bastante o risco de explosão.', explosionChance:0.05, riquezaMult:1.35},
+    {key:'fornalha_nove_dragoes', name:'Fornalha dos Nove Dragões Dourados', rarity:'Lendário', price:18000, minRealm:'nucleo', requires:'alchemist',
+      desc:'+90% no lucro do refino; risco de explosão quase nulo — mas pílulas raras às vezes ganham consciência própria.', explosionChance:0.015, riquezaMult:1.9},
+    {key:'flauta_bambu', name:'Flauta de Bambu Espiritual', rarity:'Comum', price:100, minRealm:'mortal', requires:'swordArt',
+      desc:'+3 fama e +5 felicidade ao ano, tocando para quem quiser ouvir.', famaPerYear:3, felicidadePerYear:5},
+    {key:'citara_sete_cordas', name:'Cítara das Sete Cordas de Seda', rarity:'Raro', price:2000, minRealm:'fundacao', requires:'swordArt',
+      desc:'+8 fama ao ano; +15% de aceitação ao propor Cultivo Duplo para alguém.', famaPerYear:8, dualCultivationBonus:0.15},
+    {key:'fitas_danca_celestial', name:'Fitas de Seda da Dança Celestial', rarity:'Lendário', price:16000, minRealm:'nucleo', requires:'swordArt',
+      desc:'+15 fama e +8 felicidade ao ano; desbloqueia a Dança da Harmonia, que acalma ciúmes no seu harém.', famaPerYear:15, felicidadePerYear:8, harmoniaUnlock:true},
+    {key:'sino_encantamento', name:'Sino do Encantamento de Almas', rarity:'Mítico', price:90000, minRealm:'nascente', requires:'swordArt',
+      desc:'+25 fama ao ano; em ataques à sua seita, pode encantar inimigos em vez de enfrentá-los.', famaPerYear:25, felicidadePerYear:10}
   ]
 };
 function artifactRealmUnlocked(s, item){
@@ -827,7 +907,7 @@ function equippedItem(s, slot){
 function refineMult(level){ return 1 + (level||0)*0.12; }
 function equipmentYearlyEffects(s){
   const delta = {qi:0, riqueza:0, fama:0, karma:0, saude:0, felicidade:0};
-  ['arma','armadura','pincel'].forEach(slot=>{
+  ['arma','armadura','pincel','ferramenta'].forEach(slot=>{
     const def = equippedItem(s, slot);
     if(!def) return;
     const mult = refineMult(s.equipment[slot].level);
@@ -862,6 +942,121 @@ function mitigateDamage(s, dmg){
 
 function pushLog(s, text){
   s.log.unshift({age:s.age, year:s.year, text});
+  saveGame(s);
+}
+
+/* ---------- SALVAMENTO AUTOMÁTICO ----------
+   Guarda o progresso da vida atual em localStorage a cada evento/ação —
+   funciona igual na versão web (navegador) e dentro do app Android via
+   Capacitor, já que o WebView do Capacitor também expõe localStorage
+   persistente entre sessões (não precisa de plugin nativo separado). */
+const SAVE_KEY = 'caminhoImortal_save_v1';
+function saveGame(s){
+  try{ localStorage.setItem(SAVE_KEY, JSON.stringify(s)); }
+  catch(e){ /* localStorage indisponível ou cheio — segue sem salvar */ }
+  scheduleCloudSave(s);
+}
+function loadSavedGame(){
+  try{
+    const raw = localStorage.getItem(SAVE_KEY);
+    if(!raw) return null;
+    const saved = JSON.parse(raw);
+    if(!saved || saved.alive!==true) { clearSavedGame(); return null; }
+    if(!saved.inventory) saved.inventory = {rosas:0, manuscritos:0, pilulas:0}; // compat com saves antigos, sem inventário
+    return saved;
+  }catch(e){ return null; }
+}
+function clearSavedGame(){
+  try{ localStorage.removeItem(SAVE_KEY); }catch(e){}
+}
+
+/* ---------- CONTA NA NUVEM (Firebase Auth + Firestore, opcional) ----------
+   Camada fina por cima do save local: localStorage continua sendo a fonte
+   de verdade imediata (funciona 100% offline e sem conta); quando o
+   jogador está logado, cada saveGame() também é replicado na nuvem
+   (com debounce, pra não gerar uma escrita no Firestore por clique) e,
+   ao logar num aparelho novo, o save da nuvem é oferecido em vez do local. */
+let cloudUser = null;
+let cloudSaveOverride = null;
+let cloudSaveTimer = null;
+function scheduleCloudSave(s){
+  if(!cloudUser || !window.__cloud) return;
+  if(!s.alive) { flushCloudSave(s); return; } // morte/ascensão: salva na hora, sem esperar o debounce
+  clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = setTimeout(()=>flushCloudSave(s), 4000);
+}
+function flushCloudSave(s){
+  if(!cloudUser || !window.__cloud) return;
+  window.__cloud.saveToCloud(cloudUser.uid, s).catch(()=>{ /* falha de rede — o save local segue intacto */ });
+}
+function handleAuthState(user){
+  cloudUser = user;
+  const loggedOutEl = $('#cloudAuthLoggedOut');
+  const loggedInEl = $('#cloudAuthLoggedIn');
+  if(!loggedOutEl || !loggedInEl) return; // UI ainda não montada
+  if(user){
+    loggedOutEl.classList.add('hidden');
+    loggedInEl.classList.remove('hidden');
+    $('#cloudAuthEmail').textContent = user.email || '';
+    if(window.__cloud){
+      window.__cloud.loadFromCloud(user.uid).then(cloudState=>{
+        if(cloudState && cloudState.alive===true){
+          if(!cloudState.inventory) cloudState.inventory = {rosas:0, manuscritos:0, pilulas:0}; // compat com saves antigos
+          cloudSaveOverride = cloudState;
+          renderSaveContinue();
+        }
+      }).catch(()=>{ /* sem nuvem disponível agora — segue só com o save local */ });
+    }
+  } else {
+    loggedOutEl.classList.remove('hidden');
+    loggedInEl.classList.add('hidden');
+    cloudSaveOverride = null;
+  }
+}
+window.__onAuthState = handleAuthState;
+const CLOUD_ERROR_MESSAGES = {
+  'auth/email-already-in-use': 'Já existe uma conta com este e-mail — tente entrar em vez de criar uma nova.',
+  'auth/invalid-email': 'E-mail inválido.',
+  'auth/weak-password': 'A senha precisa ter pelo menos 6 caracteres.',
+  'auth/wrong-password': 'Senha incorreta.',
+  'auth/invalid-credential': 'E-mail ou senha incorretos.',
+  'auth/user-not-found': 'Nenhuma conta encontrada com este e-mail.',
+  'auth/too-many-requests': 'Muitas tentativas seguidas — aguarde um pouco antes de tentar de novo.',
+  'auth/missing-email': 'Digite um e-mail primeiro.',
+  'auth/network-request-failed': 'Sem conexão com a internet no momento.'
+};
+function cloudErrorMessage(err){
+  return CLOUD_ERROR_MESSAGES[err && err.code] || 'Algo deu errado. Tente novamente em instantes.';
+}
+function renderCloudAuthUI(){
+  const msg = $('#cloudAuthMsg');
+  const setMsg = (text, isError)=>{ if(msg){ msg.textContent = text||''; msg.style.color = isError? 'var(--danger, #c0392b)' : 'inherit'; } };
+  $('#btnCloudSignIn').onclick = ()=>{
+    if(!window.__cloud){ setMsg('Serviço de nuvem ainda carregando — tente de novo em instantes.', true); return; }
+    const email = $('#inpCloudEmail').value.trim();
+    const pass = $('#inpCloudPass').value;
+    setMsg('Entrando...');
+    window.__cloud.signIn(email, pass).then(()=> setMsg('')).catch(err=> setMsg(cloudErrorMessage(err), true));
+  };
+  $('#btnCloudSignUp').onclick = ()=>{
+    if(!window.__cloud){ setMsg('Serviço de nuvem ainda carregando — tente de novo em instantes.', true); return; }
+    const email = $('#inpCloudEmail').value.trim();
+    const pass = $('#inpCloudPass').value;
+    setMsg('Criando conta...');
+    window.__cloud.signUp(email, pass).then(()=> setMsg('')).catch(err=> setMsg(cloudErrorMessage(err), true));
+  };
+  $('#btnCloudSignOut').onclick = ()=>{
+    if(!window.__cloud) return;
+    window.__cloud.signOutUser().then(()=>{ cloudUser=null; cloudSaveOverride=null; renderSaveContinue(); }).catch(()=>{});
+  };
+  $('#linkForgotPass').onclick = (ev)=>{
+    ev.preventDefault();
+    if(!window.__cloud){ setMsg('Serviço de nuvem ainda carregando — tente de novo em instantes.', true); return; }
+    const email = $('#inpCloudEmail').value.trim();
+    if(!email){ setMsg('Digite seu e-mail acima primeiro, depois clique aqui de novo.', true); return; }
+    setMsg('Enviando e-mail de recuperação...');
+    window.__cloud.resetPassword(email).then(()=> setMsg('E-mail de recuperação enviado — confira sua caixa de entrada.')).catch(err=> setMsg(cloudErrorMessage(err), true));
+  };
 }
 
 /* ---------- RETRATO: AURA PROCEDURAL ---------- */
@@ -906,12 +1101,14 @@ const ACHIEVEMENTS = [
   {id:'mestre_alquimista', label:'Mestre Alquimista', cond:s=>!!s.alchemist},
   {id:'medico_imortal', label:'Médico Imortal', cond:s=>!!s.physician},
   {id:'mestre_da_espada_arte', label:'Mestre da Espada e da Arte', cond:s=>!!s.swordArt},
-  {id:'artefato_supremo', label:'Artefato Refinado ao Máximo', cond:s=>['arma','armadura','pincel'].some(sl=>s.equipment[sl] && s.equipment[sl].level>=9)},
-  {id:'colecionador_mitico', label:'Colecionador de Relíquias Míticas', cond:s=>['arma','armadura','pincel'].some(sl=>{ const d=equippedItem(s,sl); return d && d.rarity==='Mítico'; })},
+  {id:'artefato_supremo', label:'Artefato Refinado ao Máximo', cond:s=>['arma','armadura','pincel','ferramenta'].some(sl=>s.equipment[sl] && s.equipment[sl].level>=9)},
+  {id:'colecionador_mitico', label:'Colecionador de Relíquias Míticas', cond:s=>['arma','armadura','pincel','ferramenta'].some(sl=>{ const d=equippedItem(s,sl); return d && d.rarity==='Mítico'; })},
   {id:'raiz_refinada', label:'Raízes Espirituais Refinadas', cond:s=>s.talentMult > s.talentMultBase + 0.02},
   {id:'fortuna', label:'Fortuna Acumulada', cond:s=>s.riqueza>=400},
   {id:'temido', label:'Nome Temido em Toda a Região', cond:s=>s.maxWanted>=3 || (s.fama>=70 && s.karma<0)},
-  {id:'via_demoniaca', label:'Trilhou a Via Demoníaca', cond:s=>s.corrupted}
+  {id:'via_demoniaca', label:'Trilhou a Via Demoníaca', cond:s=>s.corrupted},
+  {id:'leiloeiro_implacavel', label:'Leiloeiro Implacável', cond:s=>(s.flags.leiloesVencidos||0)>=3},
+  {id:'sangue_no_leilao', label:'Sangue Sob o Martelo do Leilão', cond:s=>!!s.flags.leilaoSangue}
 ];
 function computeAchievements(s){
   return ACHIEVEMENTS.filter(a=>a.cond(s)).map(a=>a.label);
@@ -1095,7 +1292,7 @@ EVENTS.push(
         if(s.riqueza<40){ return {outcome:'Você não tem recursos nem para essa aposta desesperada.', delta:{}}; }
         s.riqueza-=40;
         const ok = chance(0.25);
-        if(ok){ s.talentMult = +(s.talentMult+0.15).toFixed(3); s.saude-=rint(5,12); return {outcome:'A pílula impura quase o(a) mata, mas algo desperta — suas raízes se abrem um pouco, dolorosamente.', delta:{riqueza:-40, saude:-8, qi:0}}; }
+        if(ok){ s.talentMult = +(s.talentMult+0.15).toFixed(3); recalcTalentLabel(s); s.saude-=rint(5,12); return {outcome:'A pílula impura quase o(a) mata, mas algo desperta — suas raízes se abrem um pouco, dolorosamente.', delta:{riqueza:-40, saude:-8, qi:0}}; }
         const dmg = rint(15,30); s.saude-=dmg; return {outcome:'A pílula era veneno disfarçado. Você quase morre, sem ganho algum além da cicatriz.', delta:{riqueza:-40, saude:-dmg}};
       }}
   ]},
@@ -1215,7 +1412,7 @@ EVENTS.push(
     {label:'Aceitar por conveniência e estabilidade', run(s){ s.spouses.push({name:'Herdeiro(a) da Casa Rong', relationship:55, jealousy:rint(10,25)}); s.riqueza+=40; return {outcome:'O casamento é formal, calculado — mas não sem certo respeito mútuo.', delta:{riqueza:40}}; }},
     {label:'Recusar o arranjo', run(s){ s.riqueza-=10; s.felicidade+=6; return {outcome:'A família fica decepcionada, mas você recusa viver uma vida decidida por outros.', delta:{riqueza:-10, felicidade:6}}; }}
   ]},
-{id:'jov_filho_nasce', tags:['jovemadulto','adulto'], weight:13, cond:s=>s.spouses.length>0 && s.children.length<3,
+{id:'jov_filho_nasce', tags:['jovemadulto','adulto'], weight:13, cond:s=>s.spouses.length>0 && s.children.length<MAX_CHILDREN,
   text:s=>`${s.name} e ${pick(s.spouses).name} recebem a notícia: um filho está a caminho.`,
   choices:[
     {label:'Celebrar essa nova vida', run(s){ s.children.push({name:pick(['Xiaoyu','Tian','Rou','Bo','Lian']), relationship:75, age:0}); s.felicidade+=10; s.riqueza-=15; return {outcome:'A casa se enche de uma alegria nova e barulhenta.', delta:{felicidade:10, riqueza:-15}}; }},
@@ -1237,6 +1434,8 @@ EVENTS.push(
   text:s=>`Guerreiros da ${s.flags.rivalSectName} atacam uma vila sob a proteção da ${s.sect.name}, buscando recursos e humilhação pública.`,
   choices:[
     {label:'Defender a vila na linha de frente', run(s){ const ok=chance(0.45+s.realmIdx*0.04); if(ok){ s.fama+=12; s.karma+=4; return {outcome:'Sua defesa afasta os atacantes. A vila celebra, e sua seita nota o feito.', delta:{fama:12, karma:4}}; } const dmg=rint(14,26); s.saude-=dmg; return {outcome:'A defesa custa caro — você é ferido(a) gravemente antes que os atacantes recuem.', delta:{saude:-dmg}}; }},
+    {label:'Tocar o Sino do Encantamento de Almas', req:s=>{ const it=equippedItem(s,'ferramenta'); return it && it.key==='sino_encantamento'; },
+      run(s){ const ok=chance(0.8); if(ok){ s.fama+=16; s.karma+=6; return {outcome:'O Sino do Encantamento de Almas soa uma nota só — e os invasores param, encantados, largando as armas em transe. A vila é salva sem sangue derramado.', delta:{fama:16, karma:6}}; } const dmg=rint(4,10); s.saude-=dmg; s.fama+=4; return {outcome:'O encantamento funciona só em parte — a maioria dos invasores recua hipnotizada, mas um deles resiste e consegue feri-lo(a) de leve antes de fugir.', delta:{saude:-dmg, fama:4}}; }},
     {label:'Recuar e preservar a própria vida', run(s){ s.felicidade-=5; s.fama-=4; return {outcome:'Você escolhe a sobrevivência. A vila sofre, e sua ausência é notada — e comentada.', delta:{felicidade:-5, fama:-4}}; }}
   ]},
 {id:'adu_seita_espionagem', tags:['adulto'], weight:7, cond:s=>!!s.sect && !!s.flags.rivalSectName,
@@ -1244,6 +1443,13 @@ EVENTS.push(
   choices:[
     {label:'Aceitar a missão de espionagem', run(s){ const ok=chance(0.55+s.inteligencia*0.003); if(ok){ const g=rint(20,45); s.riqueza+=g; s.fama+=6; return {outcome:'A infiltração funciona. Informações valiosas — e uma boa recompensa — chegam à sua seita.', delta:{riqueza:g, fama:6}}; } s.imprisonedYears=rint(1,2); s.karma-=4; return {outcome:'Você é descoberto(a) e capturado(a) antes de escapar. A rivalidade entre as seitas se aprofunda.', delta:{karma:-4}}; }},
     {label:'Recusar — não é esse tipo de trabalho', run(s){ s.fama-=3; return {outcome:'Você recusa educadamente. Os anciãos anotam a recusa, sem surpresa.', delta:{fama:-3}}; }}
+  ]},
+{id:'leilao_rival_emboscada', tags:['jovemadulto','adulto','meiaidade','idoso'], weight:11, once:true, cond:s=>!!s.flags.auctionRivalName,
+  text:s=>`${s.flags.auctionRivalName}, humilhado(a) desde que perdeu aquele leilão para ${s.name}, finalmente encontra a chance de se vingar — capangas contratados cercam vocês em uma rua deserta.`,
+  choices:[
+    {label:'Enfrentar os capangas de frente', run(s){ const ok=chance(0.42+s.realmIdx*0.05+s.qi*0.002); if(ok){ s.fama+=10; s.karma+=2; return {outcome:`Você repele o ataque com firmeza. ${s.flags.auctionRivalName} observa de longe, furioso(a), mas não ousa se aproximar de novo.`, delta:{fama:10, karma:2}}; } const dmg=rint(16,30); s.saude-=dmg; return {outcome:`A emboscada é mais séria do que parecia — você escapa, mas gravemente ferido(a).`, delta:{saude:-dmg}}; }},
+    {label:'Usar um Talismã de Proteção, se tiver um', run(s){ if(s.talismanCount>0){ s.talismanCount-=1; return {outcome:`Um Talismã de Proteção dispara luz cegante sobre os capangas — você escapa ileso(a) enquanto eles se atrapalham.`, delta:{}}; } const dmg=rint(10,20); s.saude-=dmg; return {outcome:`Sem nenhum talismã à mão, você é pego(a) de surpresa e sai ferido(a) do confronto.`, delta:{saude:-dmg}}; }},
+    {label:'Subornar os capangas para recuar', run(s){ const cost=Math.min(s.riqueza, rint(30,70)); s.riqueza-=cost; return {outcome:`Uma bolsa de pedras espirituais na mão certa resolve o problema — por ora. ${s.flags.auctionRivalName} não vai desistir tão fácil.`, delta:{riqueza:-cost}}; }}
   ]},
 {id:'jov_traicao_conjuge', tags:['jovemadulto','adulto'], weight:5, cond:s=>s.spouses.length>0,
   text:s=>`Alguém sedutor e perigoso cruza o caminho de ${s.name}, deixando claro um interesse que vai além da amizade.`,
@@ -1325,6 +1531,17 @@ EVENTS.push(
   choices:[
     {label:'Aceitar a responsabilidade', run(s){ s.sect.rank='Ancião Júnior'; s.fama+=10; s.felicidade-=3; s.riqueza+=20; return {outcome:'Um novo título, novos privilégios — e noites mais curtas.', delta:{fama:10, felicidade:-3, riqueza:20}}; }},
     {label:'Recusar e manter liberdade', run(s){ s.felicidade+=4; return {outcome:'Você recusa gentilmente. A liberdade vale mais que o título, por ora.', delta:{felicidade:4}}; }}
+  ]},
+{id:'adu_pedido_discipulo', tags:['jovemadulto','adulto','meiaidade'], weight:9, cond:s=>!!s.sect && sectRankIndex(s)>=1 && !s.socialCircle.discipulo,
+  text:s=>{ const nm = randomPersonName(); s.flags._pendingDiscipuloName = nm; return `Um(a) jovem discípulo(a) externo(a), ${nm}, aborda ${s.name} depois de observá-lo(a) treinar por semanas. "Aceitaria me orientar pessoalmente? Prometo não decepcionar."`; },
+  choices:[
+    {label:'Aceitar como discípulo(a) pessoal', run(s){
+        const nm = s.flags._pendingDiscipuloName || randomPersonName();
+        s.socialCircle.discipulo = {name:nm, label:'Discípulo(a) Pessoal', relationship: rint(35,55)};
+        s.fama += 3; s.felicidade += 4;
+        return {outcome:`Você aceita orientar ${nm} pessoalmente. É mais um compromisso, mas também um legado começando a tomar forma.`, delta:{fama:3, felicidade:4}};
+      }},
+    {label:'Recusar — não há tempo para isso agora', run(s){ s.felicidade+=2; return {outcome:'Você recusa com educação. O(a) jovem se curva e se afasta, um pouco decepcionado(a).', delta:{felicidade:2}}; }}
   ]},
 {id:'adu_promocao_anciao', tags:['adulto','meiaidade'], weight:8, once:true, cond:s=>!!s.sect && s.sect.rank==='Ancião Júnior' && s.fama>=25,
   text:s=>`Anos de serviço leal renderam reconhecimento: ${s.name} é convidado(a) a assumir o título pleno de Ancião da ${s.sect.name}.`,
@@ -1724,6 +1941,141 @@ const ACTIONS = {
     sub:'Risco e recompensa — tesouros, técnicas ou perigo.',
     run(s){ return resolveExploration(s); }
   },
+  buscar_seita:{
+    label:'Buscar uma Seita',
+    sub:'Procurar ativamente uma seita de cultivo e se candidatar como discípulo(a).',
+    run(s){
+      const chanceOk = clamp(0.26 + (s.qi/100)*0.18 + s.fama*0.003 + (s.inteligencia-50)*0.002 + (s.talentMult-1)*0.15, 0.06, 0.8);
+      if(chance(chanceOk)){
+        const nm = pick(SECT_NAMES);
+        s.sect = {name:nm, rank:'Discípulo Externo'};
+        s.sectMult = 1.15;
+        s.felicidade += 6;
+        return {outcome:`Depois de percorrer vilarejos e picos distantes em busca de uma seita disposta a aceitá-lo(a), você é admitido(a) como Discípulo(a) Externo(a) da ${nm}.`, delta:{felicidade:6}};
+      }
+      s.felicidade -= 3;
+      return {outcome:'Você bate a várias portas de seitas conhecidas, mas nenhuma o(a) aceita desta vez — talvez com mais cultivo, fama ou sorte, a próxima tentativa vá melhor.', delta:{felicidade:-3}};
+    }
+  },
+  buscar_promocao_seita:{
+    label:'Buscar Promoção na Seita',
+    sub:'Provar seu valor perante os anciãos e tentar subir de posto formalmente, em vez de esperar ser notado(a).',
+    run(s){
+      if(!s.sect) return {outcome:'Você não pertence a nenhuma seita no momento.', delta:{}};
+      const idx = sectRankIndex(s);
+      if(idx<0 || idx>=SECT_RANKS.length-1){
+        return {outcome:`${s.name} já ocupa o posto mais alto ao qual pode aspirar por mérito próprio — não há para onde subir por ora.`, delta:{}};
+      }
+      const nextRank = SECT_RANKS[idx+1];
+      let reqOk = true, reqMsg = '', chanceOk = 0.3;
+      switch(idx){
+        case 0: // Discípulo Externo -> Discípulo Interno
+          reqOk = s.qi>=10;
+          reqMsg = 'Os anciãos nem consideram o pedido — você ainda precisa acumular mais Qi na camada atual antes de tentar o exame de promoção.';
+          chanceOk = clamp(0.35 + s.qi*0.01 + s.inteligencia*0.003, 0.1, 0.85);
+          break;
+        case 1: // Discípulo Interno -> Ancião Júnior
+          chanceOk = clamp(0.55 + s.fama*0.004 + s.inteligencia*0.002, 0.2, 0.9);
+          break;
+        case 2: // Ancião Júnior -> Ancião
+          reqOk = s.fama>=20;
+          reqMsg = 'O conselho exige mais reputação antes de considerar sua promoção a Ancião — sua fama ainda não é suficiente.';
+          chanceOk = clamp(0.4 + s.fama*0.005, 0.15, 0.85);
+          break;
+        case 3: // Ancião -> Sênior
+          reqOk = s.fama>=40;
+          reqMsg = 'É cedo demais — o círculo de Séniores exige uma reputação bem mais sólida do que a sua atual.';
+          chanceOk = clamp(0.35 + s.fama*0.004, 0.1, 0.8);
+          break;
+        case 4: // Sênior -> Ancestral
+          reqOk = s.realmIdx>=REALM_INDEX.nucleo;
+          reqMsg = 'O título de Ancestral exige um reino de cultivo mais avançado (Núcleo Dourado ou superior).';
+          chanceOk = clamp(0.3 + s.fama*0.003 + s.realmIdx*0.03, 0.1, 0.75);
+          break;
+        case 5: // Ancestral -> Patriarca
+          chanceOk = clamp((s.fama*0.5 + s.qi*0.3 + 25 + s.karma*0.2)/100, 0.05, 0.6);
+          break;
+      }
+      if(!reqOk){ return {outcome: reqMsg, delta:{}}; }
+      if(chance(chanceOk)){
+        s.sect.rank = nextRank;
+        s.fama += 8;
+        s.sectMult = Math.min((s.sectMult||1)+0.1, 2.2);
+        return {outcome:`Diante do conselho da ${s.sect.name}, ${s.name} prova seu valor e é oficialmente promovido(a) a ${nextRank}.`, delta:{fama:8}};
+      }
+      s.felicidade -= 4;
+      return {outcome:'O conselho não fica convencido desta vez — mas a porta continua aberta para tentar de novo em outro ano.', delta:{felicidade:-4}};
+    }
+  },
+  missao_seita:{
+    label:'Cumprir uma Missão da Seita',
+    sub:'Aceitar uma tarefa formal dos anciãos — recursos e reputação em troca de risco.',
+    run(s){
+      const roll = Math.random();
+      const rankBonus = (sectRankIndex(s)||0)*0.05;
+      if(roll < 0.14 - rankBonus*0.3){
+        const dmg = rint(8,20); s.saude -= dmg;
+        return {outcome:'A missão dá errado — uma emboscada, uma armadilha antiga, um cálculo errado. Você volta ferido(a), de mãos vazias.', delta:{saude:-dmg}};
+      }
+      const rg = rint(20,55) + (sectRankIndex(s)||0)*8;
+      const fg = rint(3,9);
+      s.riqueza += rg; s.fama += fg;
+      return {outcome:`A missão é cumprida com sucesso. Os anciãos da ${s.sect.name} recompensam ${s.name} com recursos e reconhecimento.`, delta:{riqueza:rg, fama:fg}};
+    }
+  },
+  escrever_manuscrito:{
+    label:'Escrever um Manuscrito',
+    sub:'Registrar técnicas e reflexões num pergaminho — pode ser estudado depois ou dado de presente. · custa 20 pedras espirituais em papel e tinta',
+    run(s){
+      if(s.riqueza<20){ return {outcome:'Papel de qualidade e tinta espiritual custam caro — você não tem recursos suficientes agora.', delta:{}}; }
+      s.riqueza -= 20;
+      const chanceOk = clamp(0.4 + s.inteligencia*0.006, 0.15, 0.9);
+      if(chance(chanceOk)){
+        s.inventory.manuscritos += 1;
+        return {outcome:'Depois de dias debruçado(a) sobre o pergaminho, um Manuscrito Raro toma forma — pronto para ser estudado ou presenteado.', delta:{riqueza:-20}};
+      }
+      return {outcome:'As ideias não se organizam direito desta vez. O pergaminho vira rascunho descartado, e os materiais se perdem.', delta:{riqueza:-20}};
+    }
+  },
+  estudar_manuscrito:{
+    label:'Estudar um Manuscrito',
+    sub:'Consumir um Manuscrito Raro do seu inventário para um avanço permanente de conhecimento.',
+    run(s){
+      if(s.inventory.manuscritos<=0) return {outcome:'Você não tem nenhum manuscrito guardado para estudar.', delta:{}};
+      s.inventory.manuscritos -= 1;
+      const ig = rint(4,9);
+      s.inteligencia += ig;
+      if(chance(0.35)){
+        const inc = +(rint(2,4)/100).toFixed(3);
+        s.talentMult = +(s.talentMult + inc).toFixed(3);
+        recalcTalentLabel(s);
+        return {outcome:'O manuscrito revela mais do que técnicas — entre suas linhas, um princípio profundo sobre suas próprias raízes espirituais se revela.', delta:{inteligencia:ig}};
+      }
+      return {outcome:'Você absorve o conteúdo do manuscrito com atenção. O conhecimento fica, silenciosamente, parte de você.', delta:{inteligencia:ig}};
+    }
+  },
+  inventario:{
+    label:'Ver Inventário',
+    sub:'Rosas, manuscritos e pílulas guardadas — vender ou administrar.',
+    run(s){ return null; } // tratado via renderInventoryMenu
+  },
+  trair_seita:{
+    label:'Trair a Seita',
+    sub:'Roubar segredos e recursos, e abandonar sua seita para sempre.',
+    run(s){
+      if(!s.sect) return {outcome:'Você não pertence a nenhuma seita para trair.', delta:{}};
+      const nomeAntigo = s.sect.name;
+      const roubo = Math.round(rint(80,220) * (1 + (sectRankIndex(s)||0)*0.3));
+      s.riqueza += roubo;
+      s.karma -= rint(25,40);
+      s.fama -= rint(15,30);
+      s.corrupted = true;
+      s.sect = null;
+      s.sectMult = 1;
+      s.flags.betrayedSectName = nomeAntigo;
+      return {outcome:`Na calada da noite, você rouba pergaminhos e recursos da ${nomeAntigo} e desaparece sem deixar rastro. Não há caminho de volta — e a seita jamais esquecerá esta traição.`, delta:{riqueza:roubo, karma:-30, fama:-20}};
+    }
+  },
   socializar:{
     label:'Sair e Socializar',
     sub:'Conhecer gente nova, tavernas, festivais, a vida da comunidade.',
@@ -1737,6 +2089,36 @@ const ACTIONS = {
     label:'Relacionamentos',
     sub:'Família, amigos e rivais — visitar, presentear, reconciliar.',
     run(s){ return null; } // tratado via renderFamilyMenu, nunca chamado diretamente
+  },
+  leilao:{
+    label:'Leilão Espiritual',
+    sub:'Disputar lances por artefatos raros contra outros cultivadores.',
+    run(s){ return null; } // tratado via startLeilao/renderLeilaoMenu, nunca chamado diretamente
+  },
+  aposentar_heranca:{
+    label:'Retirar-se e Transferir a Liderança',
+    sub:'Escolher um herdeiro e passar o legado da família adiante, ainda em vida.',
+    run(s){ return null; } // tratado via renderHerancaMenu, nunca chamado diretamente
+  },
+  danca_harmonia:{
+    label:'Dança da Harmonia',
+    sub:'Usar as Fitas de Seda da Dança Celestial para acalmar os ciúmes do seu harém.',
+    run(s){
+      const instrumento = equippedItem(s, 'ferramenta');
+      const mult = instrumento? refineMult(s.equipment.ferramenta.level) : 1;
+      let totalReduzido = 0;
+      s.spouses.forEach(sp=>{
+        const antes = sp.jealousy||0;
+        sp.jealousy = Math.max(0, antes - Math.round(18*mult));
+        totalReduzido += antes - sp.jealousy;
+        sp.relationship = clamp((sp.relationship||50) + 3, 0, 100);
+      });
+      s.felicidade = clamp(s.felicidade+5, 0, 100);
+      const outcome = totalReduzido>0
+        ? `As fitas de seda dançam pelo ar como fumaça colorida, ao som de uma melodia que só seu harém consegue ouvir por completo. Os ciúmes se dissolvem, ao menos por um tempo.`
+        : `Você dança para seu harém, mas não havia tensão para acalmar — ainda assim, o momento é bonito e todos se aproximam um pouco mais.`;
+      return {outcome, delta:{felicidade:5}};
+    }
   },
   crime:{
     label:'Cometer um Crime',
@@ -1779,6 +2161,7 @@ const ACTIONS = {
       const delta = {qi:gain, riqueza:-20};
       if(chance(0.06)){
         s.talentMult = +(s.talentMult*1.03).toFixed(3);
+        recalcTalentLabel(s);
         outcome += ' Uma epifania rara refina sutilmente suas raízes espirituais — um ganho pequeno, mas permanente.';
       }
       return {outcome, delta};
@@ -1786,17 +2169,17 @@ const ACTIONS = {
   },
   investir_comercio:{
     label:'Investir em Comércio',
-    sub:'Arriscar suas pedras espirituais em negócios e rotas comerciais.',
+    sub:'Arriscar seus taéis em negócios e rotas comerciais mundanas.',
     run(s){
-      if(s.riqueza<20){ return {outcome:'Você não tem capital suficiente para investir este ano.', delta:{}}; }
-      const stake = Math.min(s.riqueza, rint(20,60));
+      if(s.taeis<20){ return {outcome:'Você não tem capital suficiente para investir este ano.', delta:{}}; }
+      const stake = Math.min(s.taeis, rint(20,60));
       if(chance(0.55)){
         const g = Math.round(stake*(0.4+Math.random()*0.9));
-        s.riqueza += g;
-        return {outcome:'Seu investimento em rotas comerciais rende bem — o lucro chega em pedras espirituais.', delta:{riqueza:g}};
+        s.taeis += g;
+        return {outcome:'Seu investimento em rotas comerciais rende bem — o lucro chega em taéis de prata.', delta:{taeis:g}};
       }
-      s.riqueza -= stake;
-      return {outcome:'O negócio em que você investiu desmorona — concorrência desleal, carga roubada, ou pura má sorte.', delta:{riqueza:-stake}};
+      s.taeis -= stake;
+      return {outcome:'O negócio em que você investiu desmorona — concorrência desleal, carga roubada, ou pura má sorte.', delta:{taeis:-stake}};
     }
   },
   ensinar_discipulos:{
@@ -1826,7 +2209,7 @@ const ACTIONS = {
   },
   refinar_raiz:{
     label:'Buscar Pílula de Refinamento',
-    sub:'Arriscar recursos em uma pílula alquímica rara que promete fortalecer suas raízes espirituais.',
+    sub:'Arriscar recursos em uma pílula alquímica rara que promete fortalecer suas raízes espirituais. · custa 50 pedras espirituais · 55% de chance de melhorar (pequeno ganho), 33% de efeito neutro, 12% de risco de ferimento — todo resultado consome os recursos.',
     run(s){
       if(s.riqueza<50){ return {outcome:'Pílulas de refinamento de raiz custam caro — você ainda não tem recursos suficientes.', delta:{}}; }
       s.riqueza -= 50;
@@ -1837,6 +2220,7 @@ const ACTIONS = {
       } else if(roll<0.55){
         const inc = +(rint(3,7)/100).toFixed(3);
         s.talentMult = +(s.talentMult + inc).toFixed(3);
+        recalcTalentLabel(s);
         return {outcome:'A pílula se dissolve lentamente em seu dantian. Suas raízes espirituais se expandem, palpavelmente.', delta:{riqueza:-50}};
       }
       return {outcome:'A pílula tem efeito neutro — nem ganho, nem dano. Um investimento perdido.', delta:{riqueza:-50}};
@@ -1875,12 +2259,18 @@ const ACTIONS = {
     label:'Refinar Pílulas no Caldeirão',
     sub:'Transformar ervas e núcleos espirituais em pílulas medicinais valiosas.',
     run(s){
-      const base = rint(25,55) + s.inteligencia*0.4;
+      const caldeirao = equippedItem(s, 'ferramenta');
+      const hasCaldeirao = caldeirao && caldeirao.riquezaMult!==undefined;
+      const riquezaMult = hasCaldeirao ? caldeirao.riquezaMult : 1.0;
+      const explosionChance = hasCaldeirao ? caldeirao.explosionChance : 0.08;
+      const base = (rint(25,55) + s.inteligencia*0.4) * riquezaMult;
       const g = Math.round(base);
       s.riqueza += g;
-      let outcome = `O caldeirão arde com chamas espirituais. Ao fim, algumas pílulas sólidas e vendáveis restam — ${g} pedras espirituais em lucro.`;
+      let outcome = hasCaldeirao
+        ? `Com ${caldeirao.name} borbulhando à sua frente, o refino rende ${g} pedras espirituais em lucro.`
+        : `O caldeirão arde com chamas espirituais. Ao fim, algumas pílulas sólidas e vendáveis restam — ${g} pedras espirituais em lucro.`;
       const delta = {riqueza:g};
-      if(chance(0.08)){
+      if(chance(explosionChance)){
         const dmg = rint(6,16); s.saude -= dmg;
         outcome += ' Uma explosão pequena no caldeirão o(a) queima de leve — risco do ofício.';
         delta.saude = -dmg;
@@ -1938,10 +2328,36 @@ const ACTIONS = {
     sub:'Comprar armas, armaduras e pincéis espirituais — ou talismãs de proteção.',
     run(s){ return null; } // tratado via renderArtefatosMenu
   },
+  mercado_presentes:{
+    label:'Loja de Flores e Manuscritos',
+    sub:'Comprar Rosas Espirituais (cortejo) e Manuscritos Raros — para guardar, presentear ou estudar.',
+    run(s){ return null; } // tratado via renderPresentesMenu
+  },
+  preparar_pilula_preciosa:{
+    label:'Preparar uma Pílula Preciosa',
+    sub:'Em vez de vender o lote no mercado, guardar uma pílula rara e bem-feita — ótima para presentear alguém importante. · custa 40 pedras espirituais em ingredientes',
+    run(s){
+      if(s.riqueza<40){ return {outcome:'Você não tem ingredientes suficientes (40 pedras espirituais) para preparar uma pílula de qualidade agora.', delta:{}}; }
+      s.riqueza -= 40;
+      const caldeirao = equippedItem(s, 'ferramenta');
+      const explosionChance = (caldeirao && caldeirao.explosionChance!==undefined) ? caldeirao.explosionChance : 0.08;
+      if(chance(explosionChance)){
+        const dmg = rint(6,16); s.saude -= dmg;
+        return {outcome:'O caldeirão explode antes que a pílula se forme — nenhum resultado além de queimaduras leves.', delta:{riqueza:-40, saude:-dmg}};
+      }
+      s.inventory.pilulas += 1;
+      return {outcome:'Após horas de trabalho cuidadoso, uma Pílula Preciosa sólida e reluzente sai do caldeirão — perfeita para guardar ou presentear.', delta:{riqueza:-40}};
+    }
+  },
   refinar_artefato:{
     label:'Refinar um Artefato',
     sub:'Fortalecer um item já equipado — risco de falha aumenta com o nível.',
     run(s){ return null; } // tratado via renderRefinoMenu
+  },
+  casa_cambio:{
+    label:'Casa de Câmbio',
+    sub:'Trocar taéis mundanos por pedras espirituais — a uma taxa nada favorável.',
+    run(s){ return null; } // tratado via renderCambioMenu
   },
   estudar_biblioteca:{
     label:'Estudar na Biblioteca da Seita',
@@ -1954,6 +2370,7 @@ const ACTIONS = {
       if(chance(0.08)){
         const inc = +(rint(2,5)/100).toFixed(3);
         s.talentMult = +(s.talentMult + inc).toFixed(3);
+        recalcTalentLabel(s);
         outcome += ' Entre as páginas, um fragmento de manual esquecido revela um segredo sobre suas próprias raízes espirituais.';
       }
       return {outcome, delta};
@@ -2030,9 +2447,9 @@ function resolveJobSearch(s){
 function resolveWork(s){
   const job = s.job;
   const salary = jobSalary(job.level);
-  s.riqueza += salary; s.felicidade -= 2; s.qi += 1;
-  let outcome = `Você cumpriu suas funções como ${job.title.toLowerCase()}, recebendo ${salary} pedras espirituais.`;
-  const delta = {riqueza:salary};
+  s.taeis += salary; s.felicidade -= 2; s.qi += 1;
+  let outcome = `Você cumpriu suas funções como ${job.title.toLowerCase()}, recebendo ${salary} taéis de prata.`;
+  const delta = {taeis:salary};
   if(s.felicidade<15 && chance(0.12)){
     s.job = null; s.felicidade -= 6;
     return {outcome: outcome+' No entanto, seu desempenho fraco e desmotivado leva à demissão.', delta:{...delta, felicidade:-6}};
@@ -2400,7 +2817,7 @@ function openStoreModal(){
 }
 $('#btnStore').addEventListener('click', openStoreModal);
 
-const DELTA_LABELS = {saude:'Saúde', felicidade:'Felicidade', inteligencia:'Inteligência', riqueza:'Riqueza', karma:'Karma', fama:'Fama', qi:'Qi'};
+const DELTA_LABELS = {saude:'Saúde', felicidade:'Felicidade', inteligencia:'Inteligência', riqueza:'Pedras Espirituais', taeis:'Taéis', karma:'Karma', fama:'Fama', qi:'Qi'};
 function buildDeltaTags(delta){
   const wrap = el('div','delta-tags');
   let any=false;
@@ -2411,7 +2828,7 @@ function buildDeltaTags(delta){
     const tag = el('span', 'dtag '+(v>0?'up':'down'));
     const label = DELTA_LABELS[k]||k;
     const sign = v>0?'+':'';
-    tag.textContent = `${label} ${sign}${k==='riqueza'?fmtNum(v):Math.round(v)}`;
+    tag.textContent = `${label} ${sign}${(k==='riqueza'||k==='taeis')?fmtNum(v):Math.round(v)}`;
     wrap.appendChild(tag);
   });
   return any? wrap: null;
@@ -2437,6 +2854,26 @@ function renderStartScreen(){
   });
   $('#inpName').oninput = updateBeginBtn;
   renderHallOfFame();
+  renderCloudAuthUI();
+  renderSaveContinue();
+}
+function renderSaveContinue(){
+  const fromCloud = cloudSaveOverride && cloudSaveOverride.alive===true;
+  const saved = fromCloud ? cloudSaveOverride : loadSavedGame();
+  const wrap = $('#saveContinueWrap');
+  if(!saved){ wrap.classList.add('hidden'); return; }
+  wrap.classList.remove('hidden');
+  const realm = realmTitle(saved);
+  const origem = fromCloud ? ' · sincronizado da nuvem' : '';
+  $('#saveContinueInfo').innerHTML = `<p>${saved.name} — ${saved.age} anos, ${realm}${saved.lineageGeneration>1? ` (${saved.lineageGeneration}ª geração da linhagem)`:''}${origem}. O Dao aguarda a continuação.</p>`;
+  $('#btnContinueSave').onclick = ()=>{
+    state = saved;
+    saveGame(state); // garante que o save local fique igual ao que foi escolhido (nuvem ou local)
+    $('#view-start').classList.add('hidden');
+    $('#view-game').classList.remove('hidden');
+    renderYearMenu();
+    renderTopbar();
+  };
 }
 function updateBeginBtn(){
   const name = $('#inpName').value.trim();
@@ -2444,6 +2881,8 @@ function updateBeginBtn(){
 }
 $('#btnBegin').addEventListener('click', ()=>{
   const name = $('#inpName').value.trim();
+  clearSavedGame();
+  cloudSaveOverride = null;
   state = newState(name, selectedGender, selectedOrigin);
   pushLog(state, `${state.name} nasceu em uma ${ORIGINS.find(o=>o.key===state.origin).label.toLowerCase()}. Raízes espirituais: ${state.talentLabel}.`);
   $('#view-start').classList.add('hidden');
@@ -2504,6 +2943,7 @@ function renderLedger(){
 
     <div class="ledger-divider"></div>
     <div class="misc-row"><span class="k">Pedras Espirituais</span><span class="v">${fmtNum(s.riqueza)}</span></div>
+    <div class="misc-row"><span class="k">Taéis (prata)</span><span class="v">${fmtNum(s.taeis||0)}</span></div>
     <div class="misc-row"><span class="k">Fama</span><span class="v">${Math.round(s.fama)}</span></div>
     <div class="misc-row"><span class="k">Talento</span><span class="v">${s.talentLabel}${s.elements && s.elements.length? ` (${elementsLabel(s)})` : ''}</span></div>
     <div class="misc-row"><span class="k">Bônus de Qi</span><span class="v">+${Math.round((s.talentMult-1)*100)}%</span></div>
@@ -2514,7 +2954,11 @@ function renderLedger(){
     ${equipmentLedgerRow(s,'arma','Arma')}
     ${equipmentLedgerRow(s,'armadura','Armadura')}
     ${equipmentLedgerRow(s,'pincel','Pincel')}
+    ${equipmentLedgerRow(s,'ferramenta','Ferramenta')}
     ${s.talismanCount>0? `<div class="misc-row"><span class="k">Talismãs</span><span class="v">${s.talismanCount}</span></div>`:''}
+    ${s.inventory && s.inventory.rosas>0? `<div class="misc-row"><span class="k">🌹 Rosas Espirituais</span><span class="v">${s.inventory.rosas}</span></div>`:''}
+    ${s.inventory && s.inventory.manuscritos>0? `<div class="misc-row"><span class="k">📜 Manuscritos</span><span class="v">${s.inventory.manuscritos}</span></div>`:''}
+    ${s.inventory && s.inventory.pilulas>0? `<div class="misc-row"><span class="k">💊 Pílulas Preciosas</span><span class="v">${s.inventory.pilulas}</span></div>`:''}
     ${s.imprisonedYears>0? `<div class="misc-row"><span class="k">Prisão</span><span class="v">${s.imprisonedYears} ano(s)</span></div>`:''}
     ${s.wanted>0? `<div class="misc-row"><span class="k">Procurado(a)</span><span class="v">Nível ${s.wanted}</span></div>`:''}
   `;
@@ -2566,16 +3010,28 @@ function actionMenuFor(s){
   if(s.physician) menu.push({key:'tratar_pacientes', ...ACTIONS.tratar_pacientes, section:'Sustento'});
   if(s.swordArt) menu.push({key:'praticar_arte_espada', ...ACTIONS.praticar_arte_espada, label:`Praticar a Arte da Espada (${SWORD_ART_STYLES[s.swordArt].name})`, section:'Cultivo'});
   if(age>=12) menu.push({key:'mercado_artefatos', ...ACTIONS.mercado_artefatos, section:'Artefatos'});
-  if(['arma','armadura','pincel'].some(sl=>s.equipment[sl])) menu.push({key:'refinar_artefato', ...ACTIONS.refinar_artefato, section:'Artefatos'});
+  if(age>=14) menu.push({key:'leilao', ...ACTIONS.leilao, section:'Artefatos'});
+  if(['arma','armadura','pincel','ferramenta'].some(sl=>s.equipment[sl])) menu.push({key:'refinar_artefato', ...ACTIONS.refinar_artefato, section:'Artefatos'});
+  if(age>=10) menu.push({key:'casa_cambio', ...ACTIONS.casa_cambio, section:'Sustento'});
+  if(age>=10) menu.push({key:'mercado_presentes', ...ACTIONS.mercado_presentes, section:'Sustento'});
+  if(age>=10) menu.push({key:'escrever_manuscrito', ...ACTIONS.escrever_manuscrito, section:'Sustento'});
+  if(s.alchemist) menu.push({key:'preparar_pilula_preciosa', ...ACTIONS.preparar_pilula_preciosa, section:'Sustento'});
+  if((s.inventory.rosas+s.inventory.manuscritos+s.inventory.pilulas)>0) menu.push({key:'inventario', ...ACTIONS.inventario, section:'Sustento'});
+  if(age>=12 && !s.sect) menu.push({key:'buscar_seita', ...ACTIONS.buscar_seita, section:'Seita'});
   if(age>=14 && s.sect && sectRankIndex(s)>=1) menu.push({key:'estudar_biblioteca', ...ACTIONS.estudar_biblioteca, section:'Seita'});
+  if(age>=14 && s.sect && sectRankIndex(s)>=0 && sectRankIndex(s)<SECT_RANKS.length-1) menu.push({key:'buscar_promocao_seita', ...ACTIONS.buscar_promocao_seita, section:'Seita'});
+  if(s.sect && age>=14) menu.push({key:'missao_seita', ...ACTIONS.missao_seita, section:'Seita'});
   if(age>=16 && (s.realmIdx>=REALM_INDEX.fundacao || (s.sect && sectRankIndex(s)>=1))) menu.push({key:'explorar_caverna', ...ACTIONS.explorar_caverna, section:'Sustento'});
+  if(s.sect && age>=16) menu.push({key:'trair_seita', ...ACTIONS.trair_seita, section:'Caminhos Arriscados', danger:true});
   menu.push({key:'familia', ...ACTIONS.familia, section:'Vida Social'});
+  if(s.spouses.length>1 && s.equipment.ferramenta && equippedItem(s,'ferramenta') && equippedItem(s,'ferramenta').harmoniaUnlock) menu.push({key:'danca_harmonia', ...ACTIONS.danca_harmonia, section:'Vida Social'});
   if(age>=5) menu.push({key:'socializar', ...ACTIONS.socializar, section:'Vida Social'});
   if(age>=16 && !s.flags.soloPath) menu.push({key:'buscar_companheiro', ...ACTIONS.buscar_companheiro, section:'Vida Social'});
   if(age>=16 && !s.flags.soloPath && s.spouses.length===0 && !s.socialCircle.pretendente) menu.push({key:'caminho_solitario', ...ACTIONS.caminho_solitario, section:'Vida Social'});
   if(age>=14) menu.push({key:'torneio', ...ACTIONS.torneio, section:'Vida Social'});
   if(s.sect && age>=18) menu.push({key:'ensinar_discipulos', ...ACTIONS.ensinar_discipulos, section:'Vida Social'});
   menu.push({key:'descansar', ...ACTIONS.descansar, section:'Vida Social'});
+  if(age>=45 && !s.ascended && eligibleHeirs(s).length>0) menu.push({key:'aposentar_heranca', ...ACTIONS.aposentar_heranca, section:'Legado'});
   if(age>=10){
     menu.push({key:'crime', ...ACTIONS.crime, section:'Caminhos Arriscados', danger:true});
     menu.push({key:'demoniaco', ...ACTIONS.demoniaco, section:'Caminhos Arriscados', danger:true});
@@ -2590,10 +3046,12 @@ const MAX_PER_YEAR = {
   cultivar_normal:5, cultivar_intenso:3, treinar_corpo:3, peregrinacao:1, refinar_raiz:1,
   estudar:3, trabalhar:2, buscar_emprego:1, investir_comercio:2, especializacao:1,
   refinar_pilulas:3, tratar_pacientes:3, praticar_arte_espada:3,
-  mercado_artefatos:3, refinar_artefato:3, estudar_biblioteca:3, explorar_caverna:2,
+  mercado_artefatos:3, refinar_artefato:3, estudar_biblioteca:3, explorar_caverna:2, casa_cambio:3, leilao:2,
   explorar:3, socializar:3, torneio:2, ensinar_discipulos:2, descansar:3,
-  buscar_companheiro:2, caminho_solitario:1,
-  demoniaco:3, breakthrough:1, familia:5, crime:2, anuncio_sorte:1
+  buscar_companheiro:2, caminho_solitario:1, danca_harmonia:2,
+  demoniaco:3, breakthrough:1, familia:5, crime:2, anuncio_sorte:1,
+  buscar_seita:1, trair_seita:1, aposentar_heranca:1, buscar_promocao_seita:1,
+  mercado_presentes:3, escrever_manuscrito:2, preparar_pilula_preciosa:2, missao_seita:2, estudar_manuscrito:2
 };
 function actionUsesLeft(s, key){
   const max = MAX_PER_YEAR[key]!==undefined? MAX_PER_YEAR[key] : 99;
@@ -2728,9 +3186,28 @@ function chooseAction(key){
     if(actionUsesLeft(s,'mercado_artefatos')<=0) return;
     renderArtefatosMenu(); return;
   }
+  if(key==='mercado_presentes'){
+    if(actionUsesLeft(s,'mercado_presentes')<=0) return;
+    renderPresentesMenu(); return;
+  }
+  if(key==='inventario'){
+    renderInventoryMenu(); return;
+  }
   if(key==='refinar_artefato'){
     if(actionUsesLeft(s,'refinar_artefato')<=0) return;
     renderRefinoMenu(); return;
+  }
+  if(key==='casa_cambio'){
+    if(actionUsesLeft(s,'casa_cambio')<=0) return;
+    renderCambioMenu(); return;
+  }
+  if(key==='leilao'){
+    if(actionUsesLeft(s,'leilao')<=0) return;
+    startLeilao(); return;
+  }
+  if(key==='aposentar_heranca'){
+    if(actionUsesLeft(s,'aposentar_heranca')<=0) return;
+    renderHerancaMenu(); return;
   }
   if(key==='prison_wait'){
     const result = resolvePrisonWait(s);
@@ -2757,6 +3234,37 @@ function finishSubAction(result, key){
 }
 
 /* ---------- MENU: VIDA FAMILIAR ---------- */
+const MAX_CHILDREN = 6; // teto de filhos — evita menu infinito, mas dá espaço real para dinastia
+/* Botões de presente compartilhados entre todos os tipos de relacionamento —
+   além do presente genérico (sempre disponível por pedras espirituais), usa
+   o que estiver no inventário (Rosas, Manuscritos, Pílulas Preciosas). Rosas
+   só fazem sentido para cortejo/cônjuges (allowRosa). */
+function addGiftButtons(btnWrap, r, s, mkBtn, opts){
+  const allowRosa = !!(opts && opts.allowRosa);
+  btnWrap.appendChild(mkBtn('Presente Simples', ()=>{
+    if(s.riqueza<15){ finishSubAction({outcome:`Você não tem recursos suficientes para um bom presente a ${r.person.name} agora.`, delta:{}}, 'familia'); return; }
+    s.riqueza-=15; setRelationship(r.person, rint(10,18));
+    finishSubAction({outcome:`Um presente cuidadoso encanta ${r.person.name}.`, delta:{riqueza:-15}}, 'familia');
+  }));
+  if(allowRosa && s.inventory.rosas>0){
+    btnWrap.appendChild(mkBtn(`Dar uma Rosa Espiritual (${s.inventory.rosas})`, ()=>{
+      s.inventory.rosas -= 1; setRelationship(r.person, rint(18,30)); s.felicidade = clamp(s.felicidade+4,0,100);
+      finishSubAction({outcome:`Uma Rosa Espiritual, pétalas ainda brilhando com Qi condensado, encanta ${r.person.name} muito além de um presente comum.`, delta:{felicidade:4}}, 'familia');
+    }));
+  }
+  if(s.inventory.manuscritos>0){
+    btnWrap.appendChild(mkBtn(`Dar um Manuscrito (${s.inventory.manuscritos})`, ()=>{
+      s.inventory.manuscritos -= 1; setRelationship(r.person, rint(20,32)); s.felicidade = clamp(s.felicidade+3,0,100);
+      finishSubAction({outcome:`Você presenteia ${r.person.name} com um Manuscrito Raro — um gesto que carrega peso e respeito.`, delta:{felicidade:3}}, 'familia');
+    }));
+  }
+  if(s.inventory.pilulas>0){
+    btnWrap.appendChild(mkBtn(`Dar uma Pílula Preciosa (${s.inventory.pilulas})`, ()=>{
+      s.inventory.pilulas -= 1; setRelationship(r.person, rint(15,25)); s.karma = clamp(s.karma+1,-100,100);
+      finishSubAction({outcome:`${r.person.name} recebe a Pílula Preciosa com os olhos brilhando — um cuidado raro, sentido de verdade.`, delta:{karma:1}}, 'familia');
+    }));
+  }
+}
 function renderFamilyMenu(){
   const s = state;
   const story = $('#story');
@@ -2770,8 +3278,33 @@ function renderFamilyMenu(){
     <div class="story-body"><p>${relatives.length? 'Com quem você quer passar este ano?' : 'Você ainda não tem parentes vivos ou vínculos próximos — talvez seja hora de construir novos laços com "Sair e Socializar".'}</p></div>
     <div class="story-actions" id="famList"></div>
   `;
-  const list = $('#famList');
-  relatives.forEach(r=>{
+  const famRoot = $('#famList');
+  // Agrupado em seções recolhíveis (<details>) para a aba não crescer sem controle
+  // conforme cônjuges/filhos/contatos se acumulam ao longo da vida.
+  const groups = [
+    {title:'Família', items: relatives.filter(r=>r.key==='mother'||r.key==='father'||r.key.startsWith('sibling'))},
+    {title:'Cônjuges', items: relatives.filter(r=>r.isSpouse)},
+    {title:'Filhos', items: relatives.filter(r=>r.key.startsWith('child'))},
+    {title:'Amizades, Pretendentes e Rivais', items: relatives.filter(r=>r.social)}
+  ];
+  groups.forEach(group=>{
+    if(group.items.length===0) return;
+    const details = document.createElement('details');
+    details.open = true;
+    details.style.marginBottom = '10px';
+    const summary = document.createElement('summary');
+    summary.textContent = `${group.title} (${group.items.length})`;
+    summary.style.cursor = 'pointer';
+    summary.style.fontWeight = '600';
+    summary.style.padding = '6px 2px';
+    details.appendChild(summary);
+    const list = document.createElement('div');
+    list.style.display = 'flex';
+    list.style.flexDirection = 'column';
+    list.style.gap = '8px';
+    list.style.marginTop = '6px';
+    details.appendChild(list);
+    group.items.forEach(r=>{
     const row = el('div','action-btn');
     row.style.cursor='default';
     row.style.flexDirection='column'; row.style.alignItems='stretch'; row.style.gap='8px';
@@ -2802,11 +3335,7 @@ function renderFamilyMenu(){
         setRelationship(r.person, rint(5,12)); s.felicidade+=4;
         finishSubAction({outcome:`Você passa um tempo de qualidade com ${r.person.name}.`, delta:{felicidade:4}}, 'familia');
       }));
-      btnWrap.appendChild(mkBtn('Presentear', ()=>{
-        if(s.riqueza<15){ finishSubAction({outcome:`Você não tem recursos suficientes para um bom presente a ${r.person.name} agora.`, delta:{}}, 'familia'); return; }
-        s.riqueza-=15; setRelationship(r.person, rint(10,18));
-        finishSubAction({outcome:`Um presente cuidadoso encanta ${r.person.name}.`, delta:{riqueza:-15}}, 'familia');
-      }));
+      addGiftButtons(btnWrap, r, s, mkBtn, {allowRosa:false});
       btnWrap.appendChild(mkBtn('Pedir Conselho', ()=>{
         s.inteligencia+=2; setRelationship(r.person, rint(2,6));
         finishSubAction({outcome:`${r.person.name} compartilha sabedoria acumulada ao longo dos anos.`, delta:{inteligencia:2}}, 'familia');
@@ -2817,11 +3346,7 @@ function renderFamilyMenu(){
         setRelationship(r.person, rint(6,14)); s.felicidade+=2;
         finishSubAction({outcome:`Você dedica tempo a cortejar ${r.person.name}. As coisas avançam, aos poucos.`, delta:{felicidade:2}}, 'familia');
       }));
-      btnWrap.appendChild(mkBtn('Presentear', ()=>{
-        if(s.riqueza<15){ finishSubAction({outcome:`Você não tem recursos suficientes para um presente digno agora.`, delta:{}}, 'familia'); return; }
-        s.riqueza-=15; setRelationship(r.person, rint(8,15));
-        finishSubAction({outcome:`Um presente bem escolhido aproxima vocês dois.`, delta:{riqueza:-15}}, 'familia');
-      }));
+      addGiftButtons(btnWrap, r, s, mkBtn, {allowRosa:true});
       if(canPropose){
         btnWrap.appendChild(mkBtn('Pedir em Casamento', ()=>{
           const isAdditional = s.spouses.length>0;
@@ -2845,14 +3370,25 @@ function renderFamilyMenu(){
         setRelationship(r.person, rint(5,12)); s.felicidade+=4;
         finishSubAction({outcome:`Você passa um tempo de qualidade com ${r.person.name}.`, delta:{felicidade:4}}, 'familia');
       }));
-      btnWrap.appendChild(mkBtn('Presentear', ()=>{
-        if(s.riqueza<15){ finishSubAction({outcome:`Você não tem recursos suficientes para um bom presente a ${r.person.name} agora.`, delta:{}}, 'familia'); return; }
-        s.riqueza-=15; setRelationship(r.person, rint(10,18));
-        finishSubAction({outcome:`Um presente cuidadoso encanta ${r.person.name}.`, delta:{riqueza:-15}}, 'familia');
-      }));
+      addGiftButtons(btnWrap, r, s, mkBtn, {allowRosa:true});
       btnWrap.appendChild(mkBtn('Cultivo Duplo', ()=>{
         finishSubAction(resolveDualCultivation(s, r.person), 'familia');
       }));
+      if(s.children.length<MAX_CHILDREN && r.person.relationship>=40){
+        btnWrap.appendChild(mkBtn('Tentar Ter um Filho', ()=>{
+          const chanceOk = clamp(0.32 + r.person.relationship*0.005, 0.3, 0.75);
+          if(chance(chanceOk)){
+            const childName = pick(['Xiaoyu','Tian','Rou','Bo','Lian','Wei','Jia','Yun']);
+            s.children.push({name:childName, relationship:rint(65,85), age:0});
+            s.felicidade = clamp(s.felicidade+rint(8,14), 0, 100);
+            setRelationship(r.person, rint(5,10));
+            finishSubAction({outcome:`Meses depois, ${r.person.name} dá à luz a ${childName}. A casa ganha um novo som — o choro de uma criança recém-chegada.`, delta:{felicidade:10}}, 'familia');
+          } else {
+            s.felicidade = clamp(s.felicidade-2, 0, 100);
+            finishSubAction({outcome:`Vocês tentam, mas desta vez não há gravidez. ${r.person.name} sorri e diz que ainda há tempo.`, delta:{felicidade:-2}}, 'familia');
+          }
+        }));
+      }
       btnWrap.appendChild(mkBtn('Pedir Divórcio', ()=>{
         const idx = s.spouses.indexOf(r.person);
         if(idx>=0) s.spouses.splice(idx,1);
@@ -2864,40 +3400,42 @@ function renderFamilyMenu(){
         setRelationship(r.person, rint(5,12)); s.felicidade+=4;
         finishSubAction({outcome:`Você passa um tempo de qualidade com ${r.person.name}.`, delta:{felicidade:4}}, 'familia');
       }));
-      btnWrap.appendChild(mkBtn('Presentear', ()=>{
-        if(s.riqueza<15){ finishSubAction({outcome:`Você não tem recursos suficientes para um bom presente a ${r.person.name} agora.`, delta:{}}, 'familia'); return; }
-        s.riqueza-=15; setRelationship(r.person, rint(10,18));
-        finishSubAction({outcome:`Um presente cuidadoso encanta ${r.person.name}.`, delta:{riqueza:-15}}, 'familia');
-      }));
-      btnWrap.appendChild(mkBtn('Pedir um Favor', ()=>{
-        if(r.person.relationship<40){ finishSubAction({outcome:`${r.person.name} ainda não confia o bastante em você para ajudar com algo assim.`, delta:{}}, 'familia'); return; }
-        const ok = chance(0.5 + r.person.relationship*0.004);
-        if(ok){ const g=rint(20,45); s.riqueza+=g; setRelationship(r.person, -rint(3,8));
-          finishSubAction({outcome:`${r.person.name} topa ajudar, puxando alguns contatos e recursos.`, delta:{riqueza:g}}, 'familia'); return; }
-        setRelationship(r.person, -rint(5,12));
-        finishSubAction({outcome:`${r.person.name} não pode ajudar desta vez, e o pedido pesa um pouco na amizade.`, delta:{}}, 'familia');
-      }));
+      addGiftButtons(btnWrap, r, s, mkBtn, {allowRosa:false});
+      if(r.key==='social_discipulo'){
+        btnWrap.appendChild(mkBtn('Orientar Pessoalmente', ()=>{
+          const qg = rint(3,8) + Math.round(s.inteligencia*0.03);
+          s.qi += qg; setRelationship(r.person, rint(6,14)); s.fama += 1;
+          finishSubAction({outcome:`Você dedica tempo pessoalmente a orientar ${r.person.name}. O elo entre mestre e discípulo(a) se aprofunda, e sua própria compreensão do Dao se refina no processo de ensinar.`, delta:{qi:qg, fama:1}}, 'familia');
+        }));
+      } else {
+        btnWrap.appendChild(mkBtn('Pedir um Favor', ()=>{
+          if(r.person.relationship<40){ finishSubAction({outcome:`${r.person.name} ainda não confia o bastante em você para ajudar com algo assim.`, delta:{}}, 'familia'); return; }
+          const ok = chance(0.5 + r.person.relationship*0.004);
+          if(ok){ const g=rint(20,45); s.riqueza+=g; setRelationship(r.person, -rint(3,8));
+            finishSubAction({outcome:`${r.person.name} topa ajudar, puxando alguns contatos e recursos.`, delta:{riqueza:g}}, 'familia'); return; }
+          setRelationship(r.person, -rint(5,12));
+          finishSubAction({outcome:`${r.person.name} não pode ajudar desta vez, e o pedido pesa um pouco na amizade.`, delta:{}}, 'familia');
+        }));
+      }
     } else {
       btnWrap.appendChild(mkBtn('Visitar', ()=>{
         setRelationship(r.person, rint(5,12)); s.felicidade+=4;
         finishSubAction({outcome:`Você passa um tempo de qualidade com ${r.person.name}.`, delta:{felicidade:4}}, 'familia');
       }));
-      btnWrap.appendChild(mkBtn('Presentear', ()=>{
-        if(s.riqueza<15){ finishSubAction({outcome:`Você não tem recursos suficientes para um bom presente a ${r.person.name} agora.`, delta:{}}, 'familia'); return; }
-        s.riqueza-=15; setRelationship(r.person, rint(10,18));
-        finishSubAction({outcome:`Um presente cuidadoso encanta ${r.person.name}.`, delta:{riqueza:-15}}, 'familia');
-      }));
+      addGiftButtons(btnWrap, r, s, mkBtn, {allowRosa:false});
       btnWrap.appendChild(mkBtn('Ignorar por um tempo', ()=>{
         setRelationship(r.person, -rint(6,14));
         finishSubAction({outcome:`Você se afasta, envolvido(a) em outras prioridades. ${r.person.name} percebe a distância.`, delta:{}}, 'familia');
       }));
     }
     list.appendChild(row);
+    });
+    famRoot.appendChild(details);
   });
   const back = el('button','btn btn-ghost btn-block','Voltar');
   back.style.marginTop='6px';
   back.onclick = ()=>renderYearMenu();
-  list.appendChild(back);
+  famRoot.appendChild(back);
   renderLedger();
 }
 
@@ -2942,6 +3480,7 @@ function renderEspecializacaoMenu(){
     <div class="story-actions" id="especList"></div>
   `;
   const list = $('#especList');
+  const successPct = Math.round(clamp(0.45 + s.inteligencia*0.006 + artifactEspecializacaoBonus(s), 0, 1) * 100);
   const opts = [
     {key:'alchemist', label:'Alquimia (Dan Xiu)', desc:'Refinar ervas e núcleos espirituais em pílulas — riqueza e poder sobre caldeirões e chamas espirituais.', cost:40},
     {key:'physician', label:'Medicina (Xian Yi)', desc:'Curar meridianos, purgar venenos e tratar traumas do corpo e da alma — fama e karma através do cuidado.', cost:40},
@@ -2949,7 +3488,7 @@ function renderEspecializacaoMenu(){
   ];
   opts.forEach(o=>{
     const btn = el('button','action-btn');
-    btn.innerHTML = `<span><span class="at">${o.label}</span><br><span class="as">${o.desc} · custa ${o.cost} pedras espirituais em materiais de estudo</span></span>`;
+    btn.innerHTML = `<span><span class="at">${o.label}</span><br><span class="as">${o.desc} · custa ${o.cost} pedras espirituais em materiais de estudo · ${successPct}% de chance de sucesso (falha consome os materiais mesmo assim)</span></span>`;
     btn.onclick = ()=>{
       if(s.riqueza<o.cost){ finishSubAction({outcome:`Você não tem recursos suficientes (${o.cost} pedras espirituais) para começar esse estudo agora.`, delta:{}}, 'especializacao'); return; }
       s.riqueza -= o.cost;
@@ -2964,6 +3503,90 @@ function renderEspecializacaoMenu(){
     };
     list.appendChild(btn);
   });
+  const back = el('button','btn btn-ghost btn-block','Voltar');
+  back.style.marginTop='6px';
+  back.onclick = ()=>renderYearMenu();
+  list.appendChild(back);
+  renderLedger();
+}
+
+/* ---------- MENU: LOJA DE PRESENTES (rosas e manuscritos) ---------- */
+function renderPresentesMenu(){
+  const s = state;
+  const story = $('#story');
+  const stg = stageFor(s.age);
+  story.innerHTML = `
+    <div class="story-head">
+      <h2>Loja de Flores e Manuscritos</h2>
+      <span class="stage-tag">${stg.label} · ${s.age} anos</span>
+    </div>
+    <div class="story-body"><p>Um pequeno pavilhão perto do mercado principal, especializado em gestos que dinheiro sozinho não compra. Você tem: 🌹 ${s.inventory.rosas} · 📜 ${s.inventory.manuscritos} · 💊 ${s.inventory.pilulas}</p></div>
+    <div class="story-actions" id="presentesList"></div>
+  `;
+  const list = $('#presentesList');
+  const opts = [
+    {key:'rosas', label:'🌹 Rosa Espiritual', desc:'Uma flor que retém Qi por décadas sem murchar — presente clássico de cortejo, muito mais forte que um presente comum.', cost:10},
+    {key:'manuscritos', label:'📜 Manuscrito Raro', desc:'Um pergaminho com técnicas ou reflexões de algum cultivador anônimo — pode ser estudado ou dado de presente a qualquer pessoa próxima.', cost:60}
+  ];
+  opts.forEach(o=>{
+    const btn = el('button','action-btn');
+    btn.innerHTML = `<span><span class="at">${o.label}</span><br><span class="as">${o.desc} · ${o.cost} pedras espirituais</span></span>`;
+    btn.onclick = ()=>{
+      if(s.riqueza<o.cost){ finishSubAction({outcome:`Você não tem recursos suficientes (${o.cost} pedras espirituais) para essa compra agora.`, delta:{}}, 'mercado_presentes'); return; }
+      s.riqueza -= o.cost;
+      s.inventory[o.key] += 1;
+      finishSubAction({outcome:`Você adquire ${o.label.replace(/^[^\s]+\s/,'')} e guarda com cuidado.`, delta:{riqueza:-o.cost}}, 'mercado_presentes');
+    };
+    list.appendChild(btn);
+  });
+  const back = el('button','btn btn-ghost btn-block','Voltar');
+  back.style.marginTop='6px';
+  back.onclick = ()=>renderYearMenu();
+  list.appendChild(back);
+  renderLedger();
+}
+
+/* ---------- MENU: INVENTÁRIO (vender itens guardados) ---------- */
+function renderInventoryMenu(){
+  const s = state;
+  const story = $('#story');
+  const stg = stageFor(s.age);
+  story.innerHTML = `
+    <div class="story-head">
+      <h2>Inventário</h2>
+      <span class="stage-tag">${stg.label} · ${s.age} anos</span>
+    </div>
+    <div class="story-body"><p>${(s.inventory.rosas+s.inventory.manuscritos+s.inventory.pilulas)>0? 'Itens guardados — presenteie alguém através da aba Relacionamentos, estude manuscritos, ou venda por pedras espirituais.' : 'Seu inventário está vazio no momento. Compre Rosas e Manuscritos na Loja de Flores e Manuscritos, ou prepare Pílulas Preciosas se for Alquimista.'}</p></div>
+    <div class="story-actions" id="invList"></div>
+  `;
+  const list = $('#invList');
+  const items = [
+    {key:'rosas', label:'🌹 Rosa Espiritual', sellPrice:5},
+    {key:'manuscritos', label:'📜 Manuscrito Raro', sellPrice:30},
+    {key:'pilulas', label:'💊 Pílula Preciosa', sellPrice:20}
+  ];
+  items.forEach(it=>{
+    const qty = s.inventory[it.key];
+    if(qty<=0) return;
+    const row = el('div','action-btn');
+    row.style.cursor = 'default';
+    row.innerHTML = `<span><span class="at">${it.label} — você tem ${qty}</span><br><span class="as">Vender 1 por ${it.sellPrice} pedras espirituais</span></span>`;
+    const btn = el('button','btn'); btn.style.padding='8px 12px'; btn.style.fontSize='12.5px'; btn.textContent='Vender 1';
+    btn.onclick = (ev)=>{
+      ev.stopPropagation();
+      s.inventory[it.key] -= 1; s.riqueza += it.sellPrice;
+      finishSubAction({outcome:`Você vende 1x ${it.label.replace(/^[^\s]+\s/,'')} por ${it.sellPrice} pedras espirituais.`, delta:{riqueza:it.sellPrice}}, null);
+    };
+    row.style.display='flex'; row.style.justifyContent='space-between'; row.style.alignItems='center'; row.style.gap='10px';
+    row.appendChild(btn);
+    list.appendChild(row);
+  });
+  if(s.inventory.manuscritos>0 && actionUsesLeft(s,'estudar_manuscrito')>0){
+    const studyBtn = el('button','action-btn');
+    studyBtn.innerHTML = `<span><span class="at">Estudar um Manuscrito</span><br><span class="as">${ACTIONS.estudar_manuscrito.sub} · ${actionUsesLeft(s,'estudar_manuscrito')}x restante(s) este ano</span></span>`;
+    studyBtn.onclick = ()=>{ finishSubAction(ACTIONS.estudar_manuscrito.run(s), 'estudar_manuscrito'); };
+    list.appendChild(studyBtn);
+  }
   const back = el('button','btn btn-ghost btn-block','Voltar');
   back.style.marginTop='6px';
   back.onclick = ()=>renderYearMenu();
@@ -3025,11 +3648,13 @@ function renderArtefatosMenu(){
     <div class="story-actions" id="artefatosList"></div>
   `;
   const list = $('#artefatosList');
-  const slotLabels = {arma:'⚔️ Arma', armadura:'🛡️ Armadura', pincel:'🖌️ Pincel'};
-  ['arma','armadura','pincel'].forEach(slot=>{
+  const slotLabels = {arma:'⚔️ Arma', armadura:'🛡️ Armadura', pincel:'🖌️ Pincel', ferramenta:'🔧 Ferramenta de Ofício'};
+  ['arma','armadura','pincel','ferramenta'].forEach(slot=>{
     const current = s.equipment[slot];
     const items = ARTIFACT_DB[slot];
     items.forEach(item=>{
+      if(item.requires==='alchemist' && !s.alchemist) return;
+      if(item.requires==='swordArt' && !s.swordArt) return;
       const owned = current && current.key===item.key;
       const unlocked = artifactRealmUnlocked(s, item);
       const btn = el('button','action-btn');
@@ -3067,7 +3692,7 @@ function renderRefinoMenu(){
   const s = state;
   const story = $('#story');
   const stg = stageFor(s.age);
-  const slots = ['arma','armadura','pincel'].filter(slot=>s.equipment[slot]);
+  const slots = ['arma','armadura','pincel','ferramenta'].filter(slot=>s.equipment[slot]);
   story.innerHTML = `
     <div class="story-head">
       <h2>Refinar Artefato</h2>
@@ -3082,7 +3707,7 @@ function renderRefinoMenu(){
     msg.innerHTML = '<p>Você ainda não tem nenhum artefato equipado para refinar. Visite o Pavilhão de Tesouros primeiro.</p>';
     list.appendChild(msg);
   }
-  const slotLabels = {arma:'⚔️ Arma', armadura:'🛡️ Armadura', pincel:'🖌️ Pincel'};
+  const slotLabels = {arma:'⚔️ Arma', armadura:'🛡️ Armadura', pincel:'🖌️ Pincel', ferramenta:'🔧 Ferramenta de Ofício'};
   slots.forEach(slot=>{
     const def = equippedItem(s, slot);
     const level = s.equipment[slot].level;
@@ -3108,6 +3733,267 @@ function renderRefinoMenu(){
       } else {
         finishSubAction({outcome:`O refino falha, mas o artefato resiste intacto, ainda em +${level}.`, delta:{riqueza:-cost}}, 'refinar_artefato');
       }
+    };
+    list.appendChild(btn);
+  });
+  const back = el('button','btn btn-ghost btn-block','Voltar');
+  back.style.marginTop='6px';
+  back.onclick = ()=>renderYearMenu();
+  list.appendChild(back);
+  renderLedger();
+}
+
+/* ---------- MENU: CASA DE CÂMBIO (taéis -> pedras espirituais) ---------- */
+const TAEIS_PER_PEDRA = 45; // taxa "nada favorável" — pedras espirituais são raras de verdade
+function renderCambioMenu(){
+  const s = state;
+  const story = $('#story');
+  const stg = stageFor(s.age);
+  story.innerHTML = `
+    <div class="story-head">
+      <h2>Casa de Câmbio</h2>
+      <span class="stage-tag">${stg.label} · ${s.age} anos · ${fmtNum(s.taeis||0)} taéis</span>
+    </div>
+    <div class="story-body"><p>Um cambista de seita converte taéis mundanos em pedras espirituais — a uma taxa de ${TAEIS_PER_PEDRA} taéis por pedra. "É o preço de algo raro de verdade", ele diz, sem se desculpar.</p></div>
+    <div class="story-actions" id="cambioList"></div>
+  `;
+  const list = $('#cambioList');
+  const opcoes = [
+    {label:'Trocar uma quantia pequena (100 taéis)', amount:100},
+    {label:'Trocar uma quantia média (500 taéis)', amount:500},
+    {label:'Trocar tudo que você tem', amount:null}
+  ];
+  opcoes.forEach(o=>{
+    const amount = o.amount===null? Math.floor((s.taeis||0)/TAEIS_PER_PEDRA)*TAEIS_PER_PEDRA : o.amount;
+    const pedras = Math.floor(amount/TAEIS_PER_PEDRA);
+    const btn = el('button','action-btn');
+    btn.innerHTML = `<span><span class="at">${o.label}</span><br><span class="as">${amount>0? `${fmtNum(amount)} taéis → ${fmtNum(pedras)} pedras espirituais` : 'Nada a trocar'}</span></span>`;
+    btn.disabled = (s.taeis||0)<TAEIS_PER_PEDRA || amount<TAEIS_PER_PEDRA || pedras<=0;
+    btn.onclick = ()=>{
+      if((s.taeis||0)<amount || pedras<=0) return;
+      s.taeis -= amount; s.riqueza += pedras;
+      finishSubAction({outcome:`O cambista pesa suas moedas com cuidado excessivo e entrega ${fmtNum(pedras)} pedras espirituais em troca de ${fmtNum(amount)} taéis.`, delta:{taeis:-amount, riqueza:pedras}}, 'casa_cambio');
+    };
+    list.appendChild(btn);
+  });
+  const back = el('button','btn btn-ghost btn-block','Voltar');
+  back.style.marginTop='6px';
+  back.onclick = ()=>renderYearMenu();
+  list.appendChild(back);
+  renderLedger();
+}
+
+/* ---------- LEILÃO ESPIRITUAL (disputa de lances contra NPCs) ---------- */
+const AUCTION_NPCS = [
+  {key:'orgulhoso', label:'Mercador Orgulhoso', desc:'Detesta perder em público — mas guarda rancor de verdade quando isso acontece.', aggressiveness:0.60, budgetMult:1.30, bluffSusceptibility:0.18, grudgeOnLoss:true},
+  {key:'cauteloso', label:'Colecionador Cauteloso', desc:'Recua rápido diante de qualquer sinal de confiança exagerada do adversário.', aggressiveness:0.30, budgetMult:1.00, bluffSusceptibility:0.55, grudgeOnLoss:false},
+  {key:'rico', label:'Herdeiro Rico', desc:'Dinheiro nunca é o problema para ele — só desiste se perder o interesse.', aggressiveness:0.50, budgetMult:2.10, bluffSusceptibility:0.12, grudgeOnLoss:false},
+  {key:'faminto', label:'Cultivador Faminto por Sorte', desc:'Aposta tudo cedo, mas foge assim que o preço fica sério de verdade.', aggressiveness:0.78, budgetMult:0.55, bluffSusceptibility:0.40, grudgeOnLoss:false}
+];
+let _auction = null;
+function pickAuctionItem(s){
+  const pool = [];
+  ['arma','armadura','pincel','ferramenta'].forEach(slot=>{
+    ARTIFACT_DB[slot].forEach(item=>{
+      if(item.requires==='alchemist' && !s.alchemist) return;
+      if(item.requires==='swordArt' && !s.swordArt) return;
+      if(!artifactRealmUnlocked(s, item)) return;
+      if(s.equipment[slot] && s.equipment[slot].key===item.key) return;
+      pool.push({item, slot});
+    });
+  });
+  return pool.length? pick(pool) : null;
+}
+function startLeilao(){
+  const s = state;
+  const picked = pickAuctionItem(s);
+  if(!picked){
+    applyAndReturn({outcome:'Você vai até o pátio de leilões, mas nada de interessante ou ao seu alcance está em disputa hoje.', delta:{}}, 'leilao');
+    return;
+  }
+  const npc = pick(AUCTION_NPCS);
+  const basePrice = Math.round(picked.item.price * (rint(45,75)/100));
+  _auction = {
+    item: picked.item, slot: picked.slot, npc,
+    price: basePrice,
+    npcBudget: Math.round(picked.item.price * npc.budgetMult * (rint(90,135)/100)),
+    round: 0, maxRounds: 6, bluffUsed: false
+  };
+  renderLeilaoMenu();
+}
+function npcWillCounter(a, aggroOverride){
+  if(a.price > a.npcBudget) return false;
+  const aggro = aggroOverride!==undefined? aggroOverride : a.npc.aggressiveness;
+  const room = 1 - (a.price / a.npcBudget);
+  return chance(clamp(aggro * (0.35 + 0.65*room), 0.04, 0.92));
+}
+function renderLeilaoMenu(){
+  const s = state;
+  const story = $('#story');
+  const stg = stageFor(s.age);
+  const a = _auction;
+  const item = a.item;
+  story.innerHTML = `
+    <div class="story-head">
+      <h2>Leilão Espiritual</h2>
+      <span class="stage-tag">${stg.label} · ${s.age} anos</span>
+    </div>
+    <div class="story-body">
+      <p><strong>${item.name}</strong> (${item.rarity}) vai a leilão. Do outro lado do salão, o(a) ${a.npc.label} observa com interesse. <em>${a.npc.desc}</em></p>
+      <p>Lance atual: <strong>${fmtNum(a.price)} pedras espirituais</strong> · Rodada ${a.round+1}/${a.maxRounds} · Você tem ${fmtNum(s.riqueza)} pedras espirituais.</p>
+    </div>
+    <div class="story-actions" id="leilaoList"></div>
+  `;
+  const list = $('#leilaoList');
+  const addBtn = (label, sub, onclick, disabled)=>{
+    const btn = el('button','action-btn');
+    btn.innerHTML = `<span><span class="at">${label}</span>${sub? `<br><span class="as">${sub}</span>`:''}</span>`;
+    btn.disabled = !!disabled;
+    btn.onclick = onclick;
+    list.appendChild(btn);
+  };
+  addBtn('Dar um lance', 'Aumenta o preço em cerca de 10%.', ()=>auctionBid(false));
+  addBtn('Lance agressivo', 'Aumenta o preço em cerca de 28% — impressiona ou irrita o rival.', ()=>auctionBid(true));
+  addBtn('Blefar', a.bluffUsed? 'Você já blefou nesta disputa — não vai colar de novo.' : 'Finge ter recursos ilimitados, tentando fazer o rival desistir sem subir o preço.', ()=>auctionBluff(), a.bluffUsed);
+  addBtn('Desistir do leilão', 'Abandona a disputa — o item vai para o rival.', ()=>resolveLeilao(false, {conceded:true}));
+  renderLedger();
+}
+function auctionBid(aggressive){
+  const a = _auction;
+  const pct = aggressive? rint(22,32) : rint(8,15);
+  a.price = Math.round(a.price * (1 + pct/100));
+  const aggroOverride = aggressive? (a.npc.key==='cauteloso'? Math.max(0.05,a.npc.aggressiveness-0.22) : a.npc.aggressiveness+0.15) : undefined;
+  a.round += 1;
+  if(a.price > a.npcBudget){ resolveLeilao(true); return; }
+  if(a.round>=a.maxRounds){ resolveLeilao(false); return; }
+  if(npcWillCounter(a, aggroOverride)){
+    const counterPct = rint(8, Math.round(10+a.npc.aggressiveness*20));
+    a.price = Math.round(a.price * (1+counterPct/100));
+    renderLeilaoMenu();
+  } else {
+    resolveLeilao(true);
+  }
+}
+function auctionBluff(){
+  const s = state, a = _auction;
+  if(a.bluffUsed) return;
+  a.bluffUsed = true;
+  const famaBonus = (s.fama||0)/500;
+  const ok = chance(clamp(a.npc.bluffSusceptibility + famaBonus, 0.05, 0.9));
+  a.round += 1;
+  if(ok){
+    resolveLeilao(true, {bluffSuccess:true});
+  } else {
+    a.price = Math.round(a.price * 1.12);
+    s.felicidade = clamp(s.felicidade-3, 0, 100);
+    if(a.round>=a.maxRounds || a.price>a.npcBudget){ resolveLeilao(a.price>a.npcBudget, {bluffCaught:true}); return; }
+    renderLeilaoMenu();
+  }
+}
+function resolveLeilao(playerWon, opts){
+  opts = opts||{};
+  const s = state, a = _auction;
+  if(playerWon && s.riqueza < a.price){ playerWon = false; opts.cantAfford = true; }
+  if(playerWon){
+    s.riqueza -= a.price;
+    s.equipment[a.slot] = {key:a.item.key, level:0};
+    s.flags.leiloesVencidos = (s.flags.leiloesVencidos||0)+1;
+    if(a.npc.grudgeOnLoss) s.flags.auctionRivalName = `${a.npc.label} ${pick(['Wu','Chen','Lin','Bai','Zhao'])}`;
+  }
+  renderLeilaoResultMenu(playerWon, opts);
+}
+function renderLeilaoResultMenu(playerWon, opts){
+  const s = state, a = _auction;
+  const story = $('#story');
+  const stg = stageFor(s.age);
+  let text;
+  if(playerWon){
+    text = opts.bluffSuccess
+      ? `Você ergue o queixo e finge ter recursos infinitos. O(a) ${a.npc.label} hesita, murmura algo sobre "não valer o desgaste" e recua. O martelo bate — ${a.item.name} é seu(sua) por ${fmtNum(a.price)} pedras espirituais.`
+      : `O martelo bate. ${a.item.name} é seu(sua) por ${fmtNum(a.price)} pedras espirituais, entre olhares de inveja e respeito.`;
+    if(a.npc.grudgeOnLoss) text += ` O(a) ${a.npc.label} sai batendo os pés, humilhado(a) diante da multidão — você sente que isso não vai ficar assim.`;
+  } else if(opts.cantAfford){
+    text = `Seu lance vence — mas ao pôr a mão na bolsa, você percebe que não tem ${fmtNum(a.price)} pedras espirituais para cobri-lo. Constrangido(a), você recua, e ${a.item.name} vai para o(a) ${a.npc.label}.`;
+  } else if(opts.conceded){
+    text = `Você recua da disputa. O(a) ${a.npc.label} arremata ${a.item.name} com um sorriso satisfeito.`;
+  } else {
+    text = `A disputa se arrasta até a paciência de todos se esgotar. No fim, o(a) ${a.npc.label} leva ${a.item.name} para casa.`;
+  }
+  story.innerHTML = `
+    <div class="story-head"><h2>Leilão Espiritual</h2><span class="stage-tag">${stg.label} · ${s.age} anos</span></div>
+    <div class="story-body"><p>${text}</p></div>
+    <div class="story-actions" id="leilaoResultList"></div>
+  `;
+  const list = $('#leilaoResultList');
+  if(!playerWon){
+    const demBtn = el('button','action-btn demonic');
+    demBtn.innerHTML = `<span><span class="at">Via Demoníaca: emboscar o(a) ${a.npc.label} e roubar ${a.item.name}</span><br><span class="as">Sombrio e arriscado — pode custar caro se der errado.</span></span>`;
+    demBtn.onclick = ()=>resolveLeilaoAssassinate();
+    list.appendChild(demBtn);
+  }
+  const cont = el('button','btn btn-primary btn-block', playerWon? 'Continuar' : 'Aceitar a derrota e seguir em frente');
+  cont.onclick = ()=>{
+    const delta = playerWon? {riqueza:-a.price} : {};
+    _auction = null;
+    applyAndReturn({outcome:text, delta}, 'leilao');
+  };
+  list.appendChild(cont);
+  renderLedger();
+}
+function resolveLeilaoAssassinate(){
+  const s = state, a = _auction;
+  const successChance = clamp(0.35 + (s.corrupted? 0.15:0) + (s.qi||0)*0.001, 0.1, 0.7);
+  let outcome, delta;
+  if(chance(successChance)){
+    const recovered = Math.round(a.price*0.6);
+    s.riqueza += recovered;
+    s.equipment[a.slot] = {key:a.item.key, level:0};
+    s.karma -= rint(18,30);
+    s.corrupted = true;
+    s.flags.leilaoSangue = true;
+    outcome = `Nas sombras após o leilão, você emboscada o(a) ${a.npc.label} e recupera ${a.item.name} à força, revendendo parte do que sobrou. Ninguém testemunha — mas você sabe o que fez.`;
+    delta = {riqueza: recovered, karma:-24};
+  } else {
+    const dmg = rint(10,22);
+    s.saude -= dmg; s.karma -= rint(10,18);
+    const caught = chance(0.4);
+    if(caught) s.imprisonedYears = rint(1,2);
+    outcome = caught
+      ? `A emboscada falha. O(a) ${a.npc.label} grita por guarda-costas e você é capturado(a) antes de conseguir fugir.`
+      : `A emboscada falha e vira uma briga feia. Você escapa, mas ferido(a) e com a consciência mais pesada.`;
+    delta = {saude:-dmg, karma:-14};
+  }
+  _auction = null;
+  applyAndReturn({outcome, delta}, 'leilao');
+}
+
+/* ---------- MENU: TRANSFERÊNCIA VOLUNTÁRIA DE LIDERANÇA (aposentadoria) ---------- */
+function renderHerancaMenu(){
+  const s = state;
+  const story = $('#story');
+  const stg = stageFor(s.age);
+  const heirs = eligibleHeirs(s);
+  story.innerHTML = `
+    <div class="story-head">
+      <h2>Transferir a Liderança da Família</h2>
+      <span class="stage-tag">${stg.label} · ${s.age} anos</span>
+    </div>
+    <div class="story-body"><p>Você pode se retirar da vida ativa agora, ainda em vida, e escolher pessoalmente qual filho(a) assume o legado da família a partir deste ano. É uma decisão definitiva — depois de transferir, você passa a jogar como o(a) herdeiro(a) escolhido(a).</p></div>
+    <div class="story-actions" id="herancaList"></div>
+  `;
+  const list = $('#herancaList');
+  if(heirs.length===0){
+    const msg = el('div','story-body');
+    msg.innerHTML = '<p>Nenhum filho(a) seu(sua) tem idade suficiente (14+) para assumir o legado ainda.</p>';
+    list.appendChild(msg);
+  }
+  heirs.forEach(h=>{
+    const btn = el('button','action-btn');
+    btn.innerHTML = `<span><span class="at">Transferir para ${h.name}</span><br><span class="as">${h.age} anos · vínculo ${Math.round(h.relationship||0)}/100</span></span>`;
+    btn.onclick = ()=>{
+      useActionCharge(s, 'aposentar_heranca');
+      pushLog(s, `${s.name} se retira da vida ativa, ainda em plena saúde, e transfere a liderança da família para ${h.name}.`);
+      continueAsHeir(h);
     };
     list.appendChild(btn);
   });
@@ -3221,6 +4107,7 @@ function advanceYearFlow(){
   });
   clampAllStats(s);
   if(checkDeath(s)){ endGame(); return; }
+  saveGame(s); // garante que o avanço de ano seja salvo mesmo sem nenhuma ação no meio
   renderYearMenu();
 }
 
@@ -3239,6 +4126,7 @@ function karmaBand(k){
 function endGame(){
   const s = state;
   s.alive=false;
+  saveGame(s); // registra a morte no save — evita "Continuar Jornada" ressuscitar um personagem já encerrado
   const band = karmaBand(s.karma);
   const epitaph = pick(EPITAPHS[band])(s);
   const realm = realmTitle(s);
@@ -3249,8 +4137,14 @@ function endGame(){
   const titles = computeAchievements(s);
   saveHOF({name:s.name, age:s.age, realm, cause, year:s.year});
 
-  const heir = (!s.ascended) ? bestHeir(s) : null;
+  const heirs = (!s.ascended) ? eligibleHeirs(s) : [];
   const genLabel = s.lineageGeneration>1? `<div class="misc-row" style="justify-content:center;"><span class="k">Geração da linhagem</span><span class="v">${s.lineageGeneration}ª</span></div>` : '';
+  const heirIntro = heirs.length===1
+    ? `<p class="epi-epitaph" style="margin-top:10px;">Seu(sua) filho(a) ${heirs[0].name} está pronto(a) para carregar o legado da família adiante.</p>`
+    : (heirs.length>1
+      ? `<p class="epi-epitaph" style="margin-top:10px;">${heirs.length} filhos(as) estão prontos(as) para carregar o legado adiante — escolha quem vai assumir.</p>`
+      : '');
+  const heirButtons = heirs.map((h,i)=>`<button class="btn ${i===0?'btn-primary':'btn-ghost'}" id="btnHeir${i}">Continuar como ${h.name} (${h.age} anos, vínculo ${Math.round(h.relationship||0)})</button>`).join('');
 
   const card = $('#epilogueCard');
   card.innerHTML = `
@@ -3268,16 +4162,18 @@ function endGame(){
     ${genLabel}
     <p class="epi-epitaph">"${epitaph}"</p>
     ${titles.length? `<div class="hof" style="margin-top:0;"><h3>Títulos conquistados</h3><div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;">${titles.map(t=>`<span class="dtag up" style="font-size:12.5px;">${t}</span>`).join('')}</div></div>` : ''}
-    ${heir? `<p class="epi-epitaph" style="margin-top:10px;">Seu(sua) filho(a) ${heir.name} está pronto(a) para carregar o legado da família adiante.</p>` : ''}
+    ${heirIntro}
     <div class="btn-row">
-      ${heir? `<button class="btn btn-primary" id="btnContinueHeir">Continuar como ${heir.name} (herdeiro)</button>` : ''}
-      <button class="btn ${heir?'btn-ghost':'btn-primary'} btn-block" id="btnNewLife">Nova Vida</button>
+      ${heirButtons}
+      <button class="btn ${heirs.length?'btn-ghost':'btn-primary'} btn-block" id="btnNewLife">Nova Vida</button>
     </div>
   `;
   $('#view-game').classList.add('hidden');
   $('#view-end').classList.remove('hidden');
   $('#btnNewLife').onclick = ()=>{
     monMaybeShowDeathInterstitial();
+    clearSavedGame();
+    cloudSaveOverride = null;
     $('#view-end').classList.add('hidden');
     $('#view-start').classList.remove('hidden');
     selectedGender=null; selectedOrigin=null;
@@ -3287,12 +4183,13 @@ function endGame(){
     renderStartScreen();
     renderTopbar();
   };
-  if(heir){
-    $('#btnContinueHeir').onclick = ()=>{
+  heirs.forEach((h,i)=>{
+    const btn = $(`#btnHeir${i}`);
+    if(btn) btn.onclick = ()=>{
       monMaybeShowDeathInterstitial();
-      continueAsHeir(heir);
+      continueAsHeir(h);
     };
-  }
+  });
 }
 function continueAsHeir(heirInfo){
   const deceased = state;
@@ -3303,9 +4200,12 @@ function continueAsHeir(heirInfo){
   newS.year = deceased.year;
   newS.lineageGeneration = (deceased.lineageGeneration||1) + 1;
   newS.riqueza = Math.round(deceased.riqueza * 0.5);
+  newS.taeis = Math.round((deceased.taeis||0) * 0.5) + newS.taeis;
   newS.equipment = JSON.parse(JSON.stringify(deceased.equipment));
   newS.talismanCount = deceased.talismanCount;
+  newS.inventory = deceased.inventory? JSON.parse(JSON.stringify(deceased.inventory)) : {rosas:0, manuscritos:0, pilulas:0};
   newS.talentMult = +(newS.talentMult + clamp(deceased.realmIdx*0.03,0,0.5)).toFixed(3);
+  recalcTalentLabel(newS);
   newS.talentMultBase = newS.talentMult;
   if(deceased.sect){
     newS.sect = {name: deceased.sect.name, rank: heirStartingRank(deceased.sect.rank)};
@@ -3326,4 +4226,53 @@ renderStartScreen();
 renderTopbar();
 monInit();
 
+</script>
+
+<!-- ============ PONTE PARA A CONTA NA NUVEM (Firebase) ============
+     Bloco separado, em módulo ES (exigência atual do Firebase pela CDN),
+     que só expõe um objeto global simples (window.__cloud) para o script
+     principal acima usar. O resto do jogo continua sendo um único
+     <script> clássico, sem módulos nem bundler. -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
+  import {
+    getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
+    signOut, sendPasswordResetEmail, onAuthStateChanged
+  } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
+  import {
+    getFirestore, doc, getDoc, setDoc, serverTimestamp
+  } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyBQu9D_WdV0aCcjz0uUaiPka413eDP94-A",
+    authDomain: "caminho-imortal.firebaseapp.com",
+    projectId: "caminho-imortal",
+    storageBucket: "caminho-imortal.firebasestorage.app",
+    messagingSenderId: "1057488425702",
+    appId: "1:1057488425702:web:4472c7d108051ce8dda127",
+    measurementId: "G-7QW5N32VBR"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  window.__cloud = {
+    signUp: (email, pass) => createUserWithEmailAndPassword(auth, email, pass),
+    signIn: (email, pass) => signInWithEmailAndPassword(auth, email, pass),
+    signOutUser: () => signOut(auth),
+    resetPassword: (email) => sendPasswordResetEmail(auth, email),
+    saveToCloud: async (uid, stateObj) => {
+      const clean = JSON.parse(JSON.stringify(stateObj)); // remove undefined/funções antes de gravar
+      await setDoc(doc(db, 'saves', uid), { state: clean, updatedAt: serverTimestamp() });
+    },
+    loadFromCloud: async (uid) => {
+      const snap = await getDoc(doc(db, 'saves', uid));
+      return snap.exists() ? (snap.data().state || null) : null;
+    }
+  };
+
+  onAuthStateChanged(auth, (user) => {
+    if (window.__onAuthState) window.__onAuthState(user);
+  });
 </script>
